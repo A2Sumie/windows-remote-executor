@@ -1,40 +1,80 @@
-# Agent Notes
+# Agent Guide
 
-This repository contains an executor-only toolkit for driving Windows hosts from macOS or Linux agent workflows.
+If you are an agentic tool operating from this repository, use this file as the default operating brief.
 
-## Repo Layout
+## Goal
 
-- `windows-remote-executor/` is the local shell wrapper.
-- `windows-remote-executor-native/` is the Windows-side native executor.
-- `.github/workflows/release.yml` builds release artifacts from tags.
+Use this repository to operate a Windows host from macOS or Linux through the provided executor.
 
-## Operating Intent
+- Local wrapper: `windows-remote-executor/bin/win-remote`
+- Windows native executor: `windows-remote-executor-native`
+- Default stance: SSH on a private address, access policy enabled, PowerShell minimized
 
-- Prefer `cmd.exe`, native process launch, file transfer, and Python execution.
-- Treat PowerShell as a fallback for Windows-specific administration only.
-- Prefer the framework-dependent `.NET 8` build unless a self-contained drop is explicitly required.
-- Keep SSH scoped to a private address by default.
-- If `access-policy.json` requires a token, always send it through the wrapper instead of invoking the native executable bare.
+## First Steps
 
-## Safe Defaults
+1. Read `windows-remote-executor/README.md`.
+2. Locate the real target env file outside git-tracked defaults.
+3. Start with `./windows-remote-executor/bin/win-remote probe <target>`.
+4. If the task touches host exposure or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
+5. Only then perform file transfer, process execution, deploys, or tool updates.
 
-- Do not add real hostnames, Tailscale IPs, usernames, SSH public keys, or access tokens to tracked files.
-- Do not commit `targets/*.env` except `example.env`.
-- Do not commit publish output under `windows-remote-executor-native/publish/`.
-- For release work, let GitHub Actions build release assets from a tag push.
+## Command Choice
 
-## Common Commands
+- Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
+- Use `win-remote py` for Python scripts on the Windows host.
+- Use `win-remote put` and `win-remote get` for file transfer.
+- Use `win-remote deploy` for staged directory updates.
+- Use `win-remote update-tools` to replace the Windows-side executor itself.
+- Use `win-remote policy` to install or rotate `access-policy.json`.
+- Use `win-remote guard` to validate that `sshd` is still bound safely.
+- Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell is specifically required.
+
+## PowerShell Rule
+
+Do not default to inline PowerShell quoting.
+
+- Prefer `win-remote exec --file script.ps1`.
+- If generating PowerShell dynamically, prefer `--stdin`.
+- Only use inline PowerShell for very short commands.
+- Never bypass the wrapper and send raw `-EncodedCommand` yourself unless there is a strong reason.
+
+## Security Rule
+
+- Assume the target should remain `private-only` unless the operator explicitly says otherwise.
+- Do not weaken or delete `access-policy.json`.
+- Do not remove `sshd` guard tasks.
+- Do not allow wildcard listeners such as `0.0.0.0` or `::`.
+- If a token is required, let `win-remote` forward it from the target env file.
+
+## Verification Rule
+
+After making changes, verify with at least:
+
+1. `win-remote probe <target>`
+2. one `win-remote run <target> ...` smoke test
+3. `win-remote guard <target>` if networking or policy changed
+4. one PowerShell path only if your change touched PowerShell behavior
+
+## Git Rule
+
+- Do not commit real `targets/*.env` files other than `example.env`.
+- Do not commit real access tokens, hostnames, Tailscale IPs, usernames, SSH public keys, logs, or publish output.
+- Prefer framework-dependent `.NET 8` publish when the Windows host already has `.NET 8` runtime installed.
+- Use self-contained publish only when the host cannot satisfy the runtime requirement.
+- For releases, push a version tag and let GitHub Actions build the assets.
+
+## Minimal Workflow
 
 ```bash
-dotnet build windows-remote-executor-native/src/WindowsRemoteExecutor.Native/WindowsRemoteExecutor.Native.csproj
-./windows-remote-executor-native/publish-fdd-win-x64.sh
-./windows-remote-executor-native/publish-scd-win-x64.sh
 ./windows-remote-executor/bin/win-remote probe <target>
-./windows-remote-executor/bin/win-remote policy <target>
-./windows-remote-executor/bin/win-remote guard <target>
+./windows-remote-executor/bin/win-remote run <target> whoami.exe
+./windows-remote-executor/bin/win-remote put <target> ./local.file C:/CodexRemote/inbox/local.file
+./windows-remote-executor/bin/win-remote deploy <target> ./dist C:/CodexRemote/apps/myapp
 ./windows-remote-executor/bin/win-remote update-tools <target>
 ```
 
-## Reusable Prompt Template
+## More Templates
 
-Use [templates/AGENT_INSTRUCTIONS_TEMPLATE.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/templates/AGENT_INSTRUCTIONS_TEMPLATE.md) when you want to hand this executor to Codex, Claude Code, or another agent and want a ready-made operating brief.
+- Copy-paste prompt template: `templates/AGENT_INSTRUCTIONS_TEMPLATE.md`
+- Claude-oriented entrypoint: `CLAUDE.md`
+- Codex-oriented entrypoint: `CODEX.md`

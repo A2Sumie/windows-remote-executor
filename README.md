@@ -39,10 +39,22 @@ The current framework-dependent build targets `.NET 8` on Windows.
 
 ## Agent Template
 
-This repository also ships an agent-facing operating brief:
+This repository also ships agent-facing entrypoints that are meant to be discovered directly by tooling:
 
 - [AGENTS.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/AGENTS.md) for repository-local agent guidance
+- [CLAUDE.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/CLAUDE.md) for Claude Code style entrypoint discovery
+- [CODEX.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/CODEX.md) for Codex style entrypoint discovery
 - [templates/AGENT_INSTRUCTIONS_TEMPLATE.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/templates/AGENT_INSTRUCTIONS_TEMPLATE.md) for copy-paste system-prompt or task-brief usage
+
+## Agent Quick Start
+
+If an agent opens this repository cold, the shortest safe path is:
+
+1. Read `AGENTS.md`.
+2. Read `windows-remote-executor/README.md`.
+3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
+4. Prefer `run`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, and `update-tools`.
+5. Use `exec --file` only when PowerShell is actually needed.
 
 ## License
 
