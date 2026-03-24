@@ -37,6 +37,13 @@ Start with the framework-dependent publish unless you specifically need drop-and
 
 The current framework-dependent build targets `.NET 8` on Windows.
 
+## Agent Template
+
+This repository also ships an agent-facing operating brief:
+
+- [AGENTS.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/AGENTS.md) for repository-local agent guidance
+- [templates/AGENT_INSTRUCTIONS_TEMPLATE.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/templates/AGENT_INSTRUCTIONS_TEMPLATE.md) for copy-paste system-prompt or task-brief usage
+
 ## License
 
 MIT.
