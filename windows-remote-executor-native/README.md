@@ -53,6 +53,8 @@ Preferred publish for source review and GitHub releases:
 
 This produces a framework-dependent Windows publish under `windows-remote-executor-native/publish/fdd-win-x64`. It is smaller and avoids bundling the .NET runtime into one file, which usually makes AV and VirusTotal results easier to interpret.
 
+The current project target is `.NET 8` on Windows, so the framework-dependent build expects a compatible `Microsoft.NETCore.App 8.x` runtime on the host.
+
 Optional self-contained single-file publish:
 
 ```bash

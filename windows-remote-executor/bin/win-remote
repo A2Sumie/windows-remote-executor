@@ -38,9 +38,9 @@ EOF
 default_native_publish_dir() {
   local candidate
   for candidate in \
+    "${TOOL_ROOT}/../windows-remote-executor-native/publish/fdd-win-x64" \
     "${TOOL_ROOT}/../windows-remote-executor-native/publish/scd-win-x64" \
-    "${TOOL_ROOT}/../windows-remote-executor-native/publish/win-x64" \
-    "${TOOL_ROOT}/../windows-remote-executor-native/publish/fdd-win-x64"
+    "${TOOL_ROOT}/../windows-remote-executor-native/publish/win-x64"
   do
     if [[ -f "${candidate}/WindowsRemoteExecutor.Native.exe" ]]; then
       printf '%s' "${candidate}"
@@ -806,6 +806,7 @@ cmd_update_tools() {
   local es_exe=""
   local policy_file=""
   local install_guard=0
+  local -a local_files=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -857,9 +858,12 @@ cmd_update_tools() {
   if [[ -n "${native_dir}" ]]; then
     [[ -d "${native_dir}" ]] || die "Local native directory not found: ${native_dir}"
     native_exe="${native_dir}/WindowsRemoteExecutor.Native.exe"
-    if [[ -z "${everything_dll}" && -f "${native_dir}/Everything64.dll" ]]; then
-      everything_dll="${native_dir}/Everything64.dll"
-    fi
+    local native_file
+    while IFS= read -r native_file; do
+      local_files+=("${native_file}")
+    done < <(find "${native_dir}" -maxdepth 1 -type f | sort)
+  else
+    local_files=("${native_exe}")
   fi
 
   [[ -f "${native_exe}" ]] || die "Local native exe not found: ${native_exe}"
@@ -884,8 +888,7 @@ cmd_update_tools() {
   stamp="$(date +%Y%m%d-%H%M%S)"
   ensure_remote_dir "${TARGET_TOOLS_DIR}"
 
-  local -a local_files=("${native_exe}")
-  if [[ -n "${everything_dll}" ]]; then
+  if [[ -n "${everything_dll}" ]] && [[ " ${local_files[*]} " != *" ${everything_dll} "* ]]; then
     local_files+=("${everything_dll}")
   fi
   if [[ -n "${es_exe}" ]]; then

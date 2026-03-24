@@ -35,6 +35,8 @@ The native project supports two Windows publish modes:
 
 Start with the framework-dependent publish unless you specifically need drop-and-run deployment.
 
+The current framework-dependent build targets `.NET 8` on Windows.
+
 ## License
 
 MIT.
