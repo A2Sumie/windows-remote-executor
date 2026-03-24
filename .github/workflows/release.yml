@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish Framework-Dependent Build
+        run: ./windows-remote-executor-native/publish-fdd-win-x64.sh
+
+      - name: Publish Self-Contained Build
+        run: ./windows-remote-executor-native/publish-scd-win-x64.sh
+
+      - name: Package Assets
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          mkdir -p release-assets
+          git archive --format=zip --prefix=windows-remote-executor/ -o "release-assets/windows-remote-executor-${TAG}-source.zip" HEAD
+          cd windows-remote-executor-native/publish/fdd-win-x64
+          zip -rq "../../../release-assets/windows-remote-executor-native-${TAG}-fdd-win-x64.zip" .
+          cd ../scd-win-x64
+          zip -rq "../../../release-assets/windows-remote-executor-native-${TAG}-scd-win-x64.zip" .
+          cd ../../..
+          sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" release-assets/* \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes
