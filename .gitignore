@@ -1,0 +1,9 @@
+.DS_Store
+*.zip
+
+windows-remote-executor/targets/*.env
+!windows-remote-executor/targets/example.env
+
+windows-remote-executor-native/publish/
+windows-remote-executor-native/src/WindowsRemoteExecutor.Native/bin/
+windows-remote-executor-native/src/WindowsRemoteExecutor.Native/obj/

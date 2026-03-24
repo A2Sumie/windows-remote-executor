@@ -1,0 +1,7 @@
+.DS_Store
+publish/
+src/WindowsRemoteExecutor.Native/bin/
+src/WindowsRemoteExecutor.Native/obj/
+third_party/everything-cli/*.zip
+third_party/everything-cli/es.exe
+third_party/everything-sdk/*.zip

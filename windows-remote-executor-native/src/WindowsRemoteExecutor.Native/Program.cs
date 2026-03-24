@@ -1,0 +1,146 @@
+using System.Text.Json;
+
+namespace WindowsRemoteExecutor.Native;
+
+internal static class Program
+{
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true
+    };
+
+    public static async Task<int> Main(string[] args)
+    {
+        try
+        {
+            if (args.Length == 0 || IsHelp(args[0]))
+            {
+                PrintUsage();
+                return 0;
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                Console.Error.WriteLine("This executable only runs on Windows.");
+                return 1;
+            }
+
+            var command = args[0].Trim().ToLowerInvariant();
+            var securityContext = ExecutorAccessControl.Extract(args.Skip(1).ToArray());
+            var commandArgs = securityContext.RemainingArgs;
+
+            switch (command)
+            {
+                case "bootstrap":
+                case "bootstrap-x570":
+                    var bootstrapOptions = BootstrapOptions.FromArgs(commandArgs);
+                    var bootstrapResult = await Bootstrapper.RunBootstrapAsync(bootstrapOptions);
+                    Console.WriteLine(JsonSerializer.Serialize(bootstrapResult, JsonOptions));
+                    return 0;
+
+                case "guard-sshd":
+                    return await SshExposureGuard.RunCommandAsync(commandArgs);
+
+                case "probe":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    var probe = ProbeCollector.Collect();
+                    Console.WriteLine(JsonSerializer.Serialize(probe, JsonOptions));
+                    return 0;
+
+                case "run-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.RunCommandAsync(commandArgs);
+
+                case "python-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.RunPythonAsync(commandArgs);
+
+                case "powershell-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.RunPowerShellAsync(commandArgs);
+
+                case "everything-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return EverythingSearch.SearchToStdout(commandArgs);
+
+                default:
+                    Console.Error.WriteLine($"Unknown command: {args[0]}");
+                    PrintUsage();
+                    return 1;
+            }
+        }
+        catch (ArgumentException ex)
+        {
+            Console.Error.WriteLine(ex.Message);
+            PrintUsage();
+            return 2;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine(ex);
+            return 1;
+        }
+    }
+
+    private static bool IsHelp(string value) =>
+        value is "-h" or "--help" or "help";
+
+    private static void PrintUsage()
+    {
+        Console.WriteLine(
+            """
+            WindowsRemoteExecutor.Native
+
+            Usage:
+              WindowsRemoteExecutor.Native.exe bootstrap [options]
+              WindowsRemoteExecutor.Native.exe bootstrap-x570 [options]   (legacy alias)
+              WindowsRemoteExecutor.Native.exe guard-sshd [options]
+              WindowsRemoteExecutor.Native.exe probe
+              WindowsRemoteExecutor.Native.exe run-b64 [options]
+              WindowsRemoteExecutor.Native.exe python-b64 [options]
+              WindowsRemoteExecutor.Native.exe powershell-b64 [options]
+              WindowsRemoteExecutor.Native.exe everything-b64 [options]
+
+            bootstrap options:
+              --authorized-key <public-key>
+              --public-key-file <path>
+              --user <username>
+              --listen-address <ip>
+              --codex-root <path>
+              --set-powershell-default-shell
+              --clear-default-shell
+              --install-tailscale
+
+            guard-sshd options:
+              --expected-listen-address <ip>
+              --log-path <path>
+              --no-disable
+
+            run-b64 options:
+              --file <base64-utf8-path-or-command>
+              --cwd <base64-utf8-working-directory>
+              --arg <base64-utf8-argument>
+
+            python-b64 options:
+              --script <base64-utf8-script-path>
+              --cwd <base64-utf8-working-directory>
+              --python <base64-utf8-python-path>
+              --conda-env <base64-utf8-env-name>
+              --conda-prefix <base64-utf8-prefix>
+              --arg <base64-utf8-script-argument>
+
+            powershell-b64 options:
+              --script <base64-utf8-script-body>
+              --cwd <base64-utf8-working-directory>
+              --exe <base64-utf8-powershell-path-or-command>
+
+            everything-b64 options:
+              --query <base64-utf8-query>
+              --max <count>
+
+            security option:
+              --access-token <base64-utf8-token>
+            """);
+    }
+}

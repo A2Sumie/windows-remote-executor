@@ -1,0 +1,1002 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TOOL_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# shellcheck source=../lib/common.sh
+source "${TOOL_ROOT}/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  win-remote exec <target> [--file <local-ps1> | --stdin | <powershell-code>]
+  win-remote cmd <target> <cmd-code>
+  win-remote run <target> [--cwd <remote-dir>] <program> [args...]
+  win-remote py <target> <remote-script-path> [--cwd <remote-dir>] [--python <remote-python>] [--conda-env <name> | --conda-prefix <prefix>] [-- <script-args...>]
+  win-remote find <target> <query> [--max <count>]
+  win-remote probe <target> [--out <local-json-file>]
+  win-remote guard <target> [--out <local-json-file>] [--no-disable] [--expected-listen-address <ip>]
+  win-remote policy <target> [--mode <private-only|public-with-token>] [--expected-listen-address <ip>] [--label <text>] [--token <plain-token> | --rotate-token] [--skip-guard-install] [--no-run-guard]
+  win-remote update-tools <target> [--native-dir <local-dir> | --native-exe <local-exe>] [--everything-dll <local-dll>] [--es-exe <local-es>] [--policy-file <local-json>] [--install-guard]
+  win-remote put <target> <local-path> <remote-path>
+  win-remote get <target> <remote-path> <local-path>
+  win-remote deploy <target> <local-dir> <remote-dir> [--post <powershell-code> | --post-file <local-ps1> | --post-stdin]
+  win-remote ps-encode [--file <local-ps1> | --stdin | <powershell-code>]
+  win-remote ps-decode <utf8-base64>
+  win-remote ps-check [--file <local-ps1> | --stdin | <powershell-code>]
+  win-remote help
+
+Target resolution:
+  <target> can be either:
+  - a target name mapped to <project-root>/targets/<name>.env
+  - an explicit path to a .env file
+EOF
+}
+
+default_native_publish_dir() {
+  local candidate
+  for candidate in \
+    "${TOOL_ROOT}/../windows-remote-executor-native/publish/scd-win-x64" \
+    "${TOOL_ROOT}/../windows-remote-executor-native/publish/win-x64" \
+    "${TOOL_ROOT}/../windows-remote-executor-native/publish/fdd-win-x64"
+  do
+    if [[ -f "${candidate}/WindowsRemoteExecutor.Native.exe" ]]; then
+      printf '%s' "${candidate}"
+      return
+    fi
+  done
+
+  die "No local native publish output found. Build or publish windows-remote-executor-native first."
+}
+
+default_local_es_exe() {
+  local candidate="${TOOL_ROOT}/../windows-remote-executor-native/third_party/everything-cli/es.exe"
+  [[ -f "${candidate}" ]] || return 1
+  printf '%s' "${candidate}"
+}
+
+resolve_expected_listen_address() {
+  local override="${1:-}"
+
+  if [[ -n "${override}" ]]; then
+    is_ipv4_literal "${override}" || die "Expected listen address must be an IPv4 literal: ${override}"
+    printf '%s' "${override}"
+    return
+  fi
+
+  if [[ -n "${TARGET_EXPECTED_LISTEN_ADDRESS}" ]]; then
+    is_ipv4_literal "${TARGET_EXPECTED_LISTEN_ADDRESS}" || die "TARGET_EXPECTED_LISTEN_ADDRESS must be an IPv4 literal: ${TARGET_EXPECTED_LISTEN_ADDRESS}"
+    printf '%s' "${TARGET_EXPECTED_LISTEN_ADDRESS}"
+    return
+  fi
+
+  if is_ipv4_literal "${TARGET_HOST}"; then
+    printf '%s' "${TARGET_HOST}"
+    return
+  fi
+
+  die "Expected listen address is required. Set TARGET_EXPECTED_LISTEN_ADDRESS or pass --expected-listen-address."
+}
+
+default_policy_label() {
+  local mode="$1"
+  local token="$2"
+
+  if [[ -n "${TARGET_POLICY_LABEL}" ]]; then
+    printf '%s' "${TARGET_POLICY_LABEL}"
+    return
+  fi
+
+  case "${mode}" in
+    private-only)
+      if [[ -n "${token}" ]]; then
+        printf 'PRIVATE-ONLY TOKEN-REQUIRED'
+      else
+        printf 'PRIVATE-ONLY'
+      fi
+      ;;
+    public-with-token)
+      printf 'PUBLIC-WITH-TOKEN EXPLICIT'
+      ;;
+    *)
+      die "Unsupported exposure mode: ${mode}"
+      ;;
+  esac
+}
+
+json_escape() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s' "${value}"
+}
+
+upsert_env_var() {
+  local env_file="$1"
+  local key="$2"
+  local value="$3"
+  local rendered_value
+  rendered_value="$(printf '%q' "${value}")"
+  local tmp_file
+  tmp_file="$(mktemp)"
+  local found=0
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == "${key}="* ]]; then
+      printf '%s=%s\n' "${key}" "${rendered_value}" >>"${tmp_file}"
+      found=1
+    else
+      printf '%s\n' "${line}" >>"${tmp_file}"
+    fi
+  done <"${env_file}"
+
+  if [[ ${found} -eq 0 ]]; then
+    printf '%s=%s\n' "${key}" "${rendered_value}" >>"${tmp_file}"
+  fi
+
+  mv "${tmp_file}" "${env_file}"
+}
+
+write_policy_file() {
+  local output_path="$1"
+  local expected_listen_address="$2"
+  local exposure_mode="$3"
+  local label="$4"
+  local access_token="$5"
+  local access_token_sha256=""
+  local access_token_json="null"
+
+  if [[ -n "${access_token}" ]]; then
+    access_token_sha256="$(sha256_hex "${access_token}")"
+    access_token_json="\"${access_token_sha256}\""
+  fi
+
+  cat >"${output_path}" <<EOF
+{
+  "expectedListenAddress": "$(json_escape "${expected_listen_address}")",
+  "exposureMode": "$(json_escape "${exposure_mode}")",
+  "label": "$(json_escape "${label}")",
+  "accessTokenSha256": ${access_token_json},
+  "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+}
+
+install_guard_tasks() {
+  local expected_listen_address="$1"
+  local guard_script_path="${TARGET_TOOLS_DIR}/codex-sshd-guard.cmd"
+  local local_script
+  local remote_script
+
+  local_script="$(mktemp)"
+  cat >"${local_script}" <<EOF
+@echo off
+setlocal
+"$(remote_cmd_path "${TARGET_NATIVE_EXE}")" guard-sshd --expected-listen-address ${expected_listen_address} --log-path "$(remote_cmd_path "${TARGET_GUARD_LOG_PATH}")"
+exit /b %ERRORLEVEL%
+EOF
+
+  remote_script="$(normalize_remote_path "${guard_script_path}")"
+  ensure_remote_parent "${remote_script}"
+  scp_to_remote "${local_script}" "${remote_script}"
+  rm -f "${local_script}"
+
+  local guard_script_cmd
+  guard_script_cmd="$(remote_cmd_path "${guard_script_path}")"
+
+  ssh_exec_cmd "schtasks /Create /TN \"CodexRemote Sshd Guard Startup\" /SC ONSTART /RU SYSTEM /TR \"\\\"${guard_script_cmd}\\\"\" /F && schtasks /Create /TN \"CodexRemote Sshd Guard Watch\" /SC MINUTE /MO 5 /RU SYSTEM /TR \"\\\"${guard_script_cmd}\\\"\" /F && schtasks /Run /TN \"CodexRemote Sshd Guard Watch\""
+}
+
+ssh_exec_powershell() {
+  local code="$1"
+  local -a native_tokens=("powershell-b64" "--script" "$(encode_utf8_b64 "${code}")")
+  if [[ -n "${TARGET_PS_EXE}" ]]; then
+    native_tokens+=("--exe" "$(encode_utf8_b64 "${TARGET_PS_EXE}")")
+  fi
+
+  if ssh_exec_native_tokens "${native_tokens[@]}"; then
+    return 0
+  fi
+
+  local status=$?
+  if [[ ${status} -eq 127 ]]; then
+    die "PowerShell execution now requires ${TARGET_NATIVE_EXE} on the remote host."
+  fi
+
+  return "${status}"
+}
+
+ssh_exec_cmd() {
+  local code="$1"
+  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"${code}\""
+}
+
+read_text_source() {
+  local command_name="$1"
+  shift
+
+  case "${1:-}" in
+    --file)
+      [[ $# -eq 2 ]] || die "${command_name} --file requires exactly one local file path"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      cat "$2"
+      ;;
+    --stdin)
+      [[ $# -eq 1 ]] || die "${command_name} --stdin does not accept extra arguments"
+      cat
+      ;;
+    "")
+      die "${command_name} requires inline PowerShell, --file <local-ps1>, or --stdin"
+      ;;
+    *)
+      printf '%s' "$*"
+      ;;
+  esac
+}
+
+cmd_quote() {
+  local value="${1//\"/\"\"}"
+  printf '"%s"' "${value}"
+}
+
+ssh_exec_native_tokens() {
+  local native_path_cmd
+  native_path_cmd="$(remote_cmd_path "${TARGET_NATIVE_EXE}")"
+  local -a native_tokens=("$@")
+  if [[ -n "${TARGET_ACCESS_TOKEN}" ]]; then
+    native_tokens+=("--access-token" "$(encode_utf8_b64 "${TARGET_ACCESS_TOKEN}")")
+  fi
+  local code="if exist \"${native_path_cmd}\" (\"${native_path_cmd}\""
+  local token
+  for token in "${native_tokens[@]}"; do
+    code+=" $(cmd_quote "${token}")"
+  done
+  code+=") else (exit /b 127)"
+  ssh_exec_cmd "${code}"
+}
+
+scp_to_remote() {
+  local local_path="$1"
+  local remote_path="$2"
+  scp_raw "${local_path}" "$(scp_remote_spec "${remote_path}")"
+}
+
+scp_from_remote() {
+  local remote_path="$1"
+  local local_path="$2"
+  scp_raw "$(scp_remote_spec "${remote_path}")" "${local_path}"
+}
+
+cmd_exec() {
+  [[ $# -ge 2 ]] || die "exec requires <target> plus inline PowerShell, --file <local-ps1>, or --stdin"
+  load_target "$1"
+  shift
+  local code
+  code="$(read_text_source "exec" "$@")"
+  ssh_exec_powershell "${code}"
+}
+
+cmd_cmd() {
+  [[ $# -ge 2 ]] || die "cmd requires <target> <cmd-code>"
+  load_target "$1"
+  shift
+  ssh_exec_cmd "$*"
+}
+
+cmd_run() {
+  [[ $# -ge 2 ]] || die "run requires <target> [--cwd <remote-dir>] <program> [args...]"
+  local target="$1"
+  shift
+
+  local cwd=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a directory"
+        cwd="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [[ $# -ge 1 ]] || die "run requires a program"
+
+  load_target "${target}"
+
+  local program="$1"
+  shift
+
+  local -a native_tokens=("run-b64" "--file" "$(encode_utf8_b64 "${program}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+
+  local arg
+  for arg in "$@"; do
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+  done
+
+  ssh_exec_native_tokens "${native_tokens[@]}"
+}
+
+cmd_py() {
+  [[ $# -ge 2 ]] || die "py requires <target> <remote-script-path> [options] [-- <script-args...>]"
+  local target="$1"
+  shift
+
+  local script_path
+  script_path="$(normalize_remote_path "$1")"
+  shift
+
+  local cwd=""
+  local python_path=""
+  local conda_env=""
+  local conda_prefix=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a directory"
+        cwd="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --python)
+        [[ $# -ge 2 ]] || die "--python requires a path"
+        python_path="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --conda-env)
+        [[ $# -ge 2 ]] || die "--conda-env requires a name"
+        conda_env="$2"
+        shift 2
+        ;;
+      --conda-prefix)
+        [[ $# -ge 2 ]] || die "--conda-prefix requires a path"
+        conda_prefix="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        die "Unknown py option: $1"
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+
+  local -a native_tokens=("python-b64" "--script" "$(encode_utf8_b64 "${script_path}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${python_path}" ]]; then
+    native_tokens+=("--python" "$(encode_utf8_b64 "${python_path}")")
+  fi
+  if [[ -n "${conda_env}" ]]; then
+    native_tokens+=("--conda-env" "$(encode_utf8_b64 "${conda_env}")")
+  fi
+  if [[ -n "${conda_prefix}" ]]; then
+    native_tokens+=("--conda-prefix" "$(encode_utf8_b64 "${conda_prefix}")")
+  fi
+
+  local arg
+  for arg in "$@"; do
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+  done
+
+  ssh_exec_native_tokens "${native_tokens[@]}"
+}
+
+cmd_find() {
+  [[ $# -ge 2 ]] || die "find requires <target> <query> [--max <count>]"
+  local target="$1"
+  shift
+
+  local query="$1"
+  shift
+  local max_results="100"
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --max)
+        [[ $# -ge 2 ]] || die "--max requires a count"
+        max_results="$2"
+        shift 2
+        ;;
+      *)
+        die "Unknown find option: $1"
+        ;;
+    esac
+  done
+
+  [[ "${max_results}" =~ ^[0-9]+$ ]] || die "--max must be an unsigned integer"
+
+  load_target "${target}"
+  ssh_exec_native_tokens \
+    "run-b64" \
+    "--file" "$(encode_utf8_b64 "${TARGET_EVERYTHING_ES}")" \
+    "--arg" "$(encode_utf8_b64 "-n")" \
+    "--arg" "$(encode_utf8_b64 "${max_results}")" \
+    "--arg" "$(encode_utf8_b64 "-s")" \
+    "--arg" "$(encode_utf8_b64 "${query}")"
+}
+
+cmd_probe() {
+  [[ $# -ge 1 ]] || die "probe requires <target>"
+  local target="$1"
+  shift
+  local out_file=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a file path"
+        out_file="$2"
+        shift 2
+        ;;
+      *)
+        die "Unknown probe option: $1"
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  local probe_output=""
+
+  if probe_output="$(ssh_exec_native_tokens "probe" 2>/dev/null)"; then
+    if [[ -n "${out_file}" ]]; then
+      printf '%s\n' "${probe_output}" | tee "${out_file}"
+      return
+    fi
+
+    printf '%s\n' "${probe_output}"
+    return
+  fi
+  local native_status=$?
+  if [[ ${native_status} -eq 127 ]]; then
+    die "probe now requires ${TARGET_NATIVE_EXE} on the remote host; legacy direct SSH PowerShell fallback was removed."
+  fi
+  die "native probe failed on ${TARGET_NAME:-${target}}; refusing to fall back to legacy direct SSH PowerShell"
+}
+
+cmd_guard() {
+  [[ $# -ge 1 ]] || die "guard requires <target>"
+  local target="$1"
+  shift
+  local out_file=""
+  local disable_on_unsafe=1
+  local expected_override=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a file path"
+        out_file="$2"
+        shift 2
+        ;;
+      --no-disable)
+        disable_on_unsafe=0
+        shift
+        ;;
+      --expected-listen-address)
+        [[ $# -ge 2 ]] || die "--expected-listen-address requires an IPv4 address"
+        expected_override="$2"
+        shift 2
+        ;;
+      *)
+        die "Unknown guard option: $1"
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  local expected
+  expected="$(resolve_expected_listen_address "${expected_override}")"
+  local -a native_tokens=("guard-sshd" "--expected-listen-address" "${expected}" "--log-path" "${TARGET_GUARD_LOG_PATH}")
+  if [[ ${disable_on_unsafe} -eq 0 ]]; then
+    native_tokens+=("--no-disable")
+  fi
+
+  local guard_output=""
+  if guard_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    :
+  else
+    local status=$?
+    printf '%s\n' "${guard_output}"
+    return "${status}"
+  fi
+
+  if [[ -n "${out_file}" ]]; then
+    printf '%s\n' "${guard_output}" | tee "${out_file}"
+    return
+  fi
+
+  printf '%s\n' "${guard_output}"
+}
+
+cmd_policy() {
+  [[ $# -ge 1 ]] || die "policy requires <target>"
+  local target="$1"
+  shift
+  local mode=""
+  local expected_override=""
+  local label=""
+  local access_token=""
+  local rotate_token=0
+  local install_guard=1
+  local run_guard=1
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --mode)
+        [[ $# -ge 2 ]] || die "--mode requires private-only or public-with-token"
+        mode="$2"
+        shift 2
+        ;;
+      --expected-listen-address)
+        [[ $# -ge 2 ]] || die "--expected-listen-address requires an IPv4 address"
+        expected_override="$2"
+        shift 2
+        ;;
+      --label)
+        [[ $# -ge 2 ]] || die "--label requires text"
+        label="$2"
+        shift 2
+        ;;
+      --token)
+        [[ $# -ge 2 ]] || die "--token requires a plain access token"
+        access_token="$2"
+        shift 2
+        ;;
+      --rotate-token)
+        rotate_token=1
+        shift
+        ;;
+      --skip-guard-install)
+        install_guard=0
+        shift
+        ;;
+      --no-run-guard)
+        run_guard=0
+        shift
+        ;;
+      *)
+        die "Unknown policy option: $1"
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+
+  local expected_listen_address
+  expected_listen_address="$(resolve_expected_listen_address "${expected_override}")"
+
+  if [[ -z "${mode}" ]]; then
+    mode="${TARGET_EXPOSURE_MODE}"
+  fi
+
+  case "${mode}" in
+    private-only|public-with-token)
+      ;;
+    *)
+      die "Unsupported policy mode: ${mode}"
+      ;;
+  esac
+
+  if [[ ${rotate_token} -eq 1 ]]; then
+    access_token="$(generate_access_token)"
+    upsert_env_var "${TARGET_ENV_FILE}" "TARGET_ACCESS_TOKEN" "${access_token}"
+    TARGET_ACCESS_TOKEN="${access_token}"
+  elif [[ -z "${access_token}" ]]; then
+    access_token="${TARGET_ACCESS_TOKEN}"
+  fi
+
+  if [[ "${mode}" == "public-with-token" && -z "${access_token}" ]]; then
+    die "public-with-token mode requires an access token. Set TARGET_ACCESS_TOKEN or pass --token/--rotate-token."
+  fi
+
+  if [[ -z "${label}" ]]; then
+    label="$(default_policy_label "${mode}" "${access_token}")"
+  fi
+
+  upsert_env_var "${TARGET_ENV_FILE}" "TARGET_EXPECTED_LISTEN_ADDRESS" "${expected_listen_address}"
+  upsert_env_var "${TARGET_ENV_FILE}" "TARGET_EXPOSURE_MODE" "${mode}"
+  upsert_env_var "${TARGET_ENV_FILE}" "TARGET_POLICY_LABEL" "${label}"
+  if [[ -n "${access_token}" ]]; then
+    upsert_env_var "${TARGET_ENV_FILE}" "TARGET_ACCESS_TOKEN" "${access_token}"
+    TARGET_ACCESS_TOKEN="${access_token}"
+  fi
+
+  local policy_file
+  policy_file="$(mktemp)"
+  write_policy_file "${policy_file}" "${expected_listen_address}" "${mode}" "${label}" "${access_token}"
+
+  ensure_remote_parent "${TARGET_POLICY_PATH}"
+  scp_to_remote "${policy_file}" "${TARGET_POLICY_PATH}"
+  rm -f "${policy_file}"
+
+  if [[ ${install_guard} -eq 1 ]]; then
+    install_guard_tasks "${expected_listen_address}"
+  fi
+
+  if [[ ${run_guard} -eq 1 ]]; then
+    cmd_guard "${target}"
+  fi
+}
+
+cmd_put() {
+  [[ $# -eq 3 ]] || die "put requires <target> <local-path> <remote-path>"
+  load_target "$1"
+  local local_path="$2"
+  local remote_path
+  remote_path="$(normalize_remote_path "$3")"
+
+  [[ -e "${local_path}" ]] || die "Local path not found: ${local_path}"
+  ensure_remote_parent "${remote_path}"
+  scp_to_remote "${local_path}" "${remote_path}"
+}
+
+cmd_get() {
+  [[ $# -eq 3 ]] || die "get requires <target> <remote-path> <local-path>"
+  load_target "$1"
+  local remote_path
+  remote_path="$(normalize_remote_path "$2")"
+  local local_path="$3"
+
+  mkdir -p "$(dirname "${local_path}")"
+  scp_from_remote "${remote_path}" "${local_path}"
+}
+
+cmd_deploy() {
+  [[ $# -ge 3 ]] || die "deploy requires <target> <local-dir> <remote-dir> [--post <powershell-code>]"
+  local target="$1"
+  local local_dir="$2"
+  local remote_dir
+  remote_dir="$(normalize_remote_path "$3")"
+  shift 3
+
+  local post_mode=""
+  local post_value=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --post)
+        [[ $# -ge 2 ]] || die "--post requires PowerShell code"
+        post_mode="arg"
+        post_value="$2"
+        shift 2
+        ;;
+      --post-file)
+        [[ $# -ge 2 ]] || die "--post-file requires a local .ps1 path"
+        post_mode="file"
+        post_value="$2"
+        shift 2
+        ;;
+      --post-stdin)
+        post_mode="stdin"
+        post_value=""
+        shift
+        ;;
+      *)
+        die "Unknown deploy option: $1"
+        ;;
+    esac
+  done
+
+  local post_code=""
+  case "${post_mode}" in
+    arg)
+      post_code="${post_value}"
+      ;;
+    file)
+      [[ -f "${post_value}" ]] || die "Local file not found: ${post_value}"
+      post_code="$(cat "${post_value}")"
+      ;;
+    stdin)
+      post_code="$(cat)"
+      ;;
+    "")
+      ;;
+    *)
+      die "Unsupported post mode: ${post_mode}"
+      ;;
+  esac
+
+  [[ -d "${local_dir}" ]] || die "deploy expects a local directory: ${local_dir}"
+
+  load_target "${target}"
+
+  local base_name
+  base_name="$(basename "${local_dir}")"
+  local deploy_id
+  deploy_id="$(date +%Y%m%d_%H%M%S)"
+  local stage_parent="${TARGET_STAGE_ROOT}/${deploy_id}"
+  local staged_dir="${stage_parent}/${base_name}"
+
+  ensure_remote_dir "${stage_parent}"
+  scp_raw -r "${local_dir}" "$(scp_remote_spec "${stage_parent}")"
+
+  local staged_dir_cmd
+  staged_dir_cmd="$(remote_cmd_path "${staged_dir}")"
+  local stage_parent_cmd
+  stage_parent_cmd="$(remote_cmd_path "${stage_parent}")"
+  local remote_dir_cmd
+  remote_dir_cmd="$(remote_cmd_path "${remote_dir}")"
+
+  local deploy_cmd
+  deploy_cmd="$(cat <<EOF
+if not exist "${remote_dir_cmd}" mkdir "${remote_dir_cmd}" && xcopy "${staged_dir_cmd}\\*" "${remote_dir_cmd}\\" /E /I /Y /Q >nul && rmdir /s /q "${staged_dir_cmd}" && rmdir /s /q "${stage_parent_cmd}"
+EOF
+)"
+
+  ssh_exec_cmd "${deploy_cmd}"
+
+  if [[ -n "${post_code}" ]]; then
+    ssh_exec_powershell "${post_code}"
+  fi
+}
+
+cmd_ps_encode() {
+  [[ $# -ge 1 ]] || die "ps-encode requires inline PowerShell, --file <local-ps1>, or --stdin"
+  local code
+  code="$(read_text_source "ps-encode" "$@")"
+  printf '%s\n' "$(encode_utf8_b64 "${code}")"
+}
+
+cmd_ps_decode() {
+  [[ $# -eq 1 ]] || die "ps-decode requires one base64 argument"
+  decode_utf8_b64 "$1"
+  printf '\n'
+}
+
+cmd_ps_check() {
+  [[ $# -ge 1 ]] || die "ps-check requires inline PowerShell, --file <local-ps1>, or --stdin"
+  local code
+  code="$(read_text_source "ps-check" "$@")"
+
+  local wrapped
+  wrapped="$(compose_powershell_script "${code}")"
+  local body_b64
+  body_b64="$(encode_utf8_b64 "${code}")"
+  local encoded_command
+  encoded_command="$(encode_powershell "${wrapped}")"
+
+  local utf8_roundtrip="mismatch"
+  if [[ "$(decode_utf8_b64 "${body_b64}")" == "${code}" ]]; then
+    utf8_roundtrip="ok"
+  fi
+
+  local body_chars
+  body_chars="$(printf '%s' "${code}" | wc -m | tr -d ' ')"
+  local wrapped_chars
+  wrapped_chars="$(printf '%s' "${wrapped}" | wc -m | tr -d ' ')"
+  local body_lines
+  body_lines="$(printf '%s' "${code}" | awk 'END { print NR }')"
+
+  printf 'transport=utf8-base64-via-native-executor\n'
+  printf 'body_chars=%s\n' "${body_chars}"
+  printf 'body_lines=%s\n' "${body_lines}"
+  printf 'body_utf8_base64_chars=%s\n' "${#body_b64}"
+  printf 'wrapped_chars=%s\n' "${wrapped_chars}"
+  printf 'encoded_command_chars=%s\n' "${#encoded_command}"
+  printf 'utf8_roundtrip=%s\n' "${utf8_roundtrip}"
+  printf 'remote_executor_route=%s\n' "WindowsRemoteExecutor.Native.exe powershell-b64"
+}
+
+cmd_update_tools() {
+  [[ $# -ge 1 ]] || die "update-tools requires <target>"
+  local target="$1"
+  shift
+  local native_dir=""
+  local native_exe=""
+  local everything_dll=""
+  local es_exe=""
+  local policy_file=""
+  local install_guard=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --native-dir)
+        [[ $# -ge 2 ]] || die "--native-dir requires a directory"
+        native_dir="$2"
+        shift 2
+        ;;
+      --native-exe)
+        [[ $# -ge 2 ]] || die "--native-exe requires a file path"
+        native_exe="$2"
+        shift 2
+        ;;
+      --everything-dll)
+        [[ $# -ge 2 ]] || die "--everything-dll requires a file path"
+        everything_dll="$2"
+        shift 2
+        ;;
+      --es-exe)
+        [[ $# -ge 2 ]] || die "--es-exe requires a file path"
+        es_exe="$2"
+        shift 2
+        ;;
+      --policy-file)
+        [[ $# -ge 2 ]] || die "--policy-file requires a local json file"
+        policy_file="$2"
+        shift 2
+        ;;
+      --install-guard)
+        install_guard=1
+        shift
+        ;;
+      *)
+        die "Unknown update-tools option: $1"
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+
+  if [[ -n "${native_dir}" && -n "${native_exe}" ]]; then
+    die "--native-dir and --native-exe are mutually exclusive"
+  fi
+
+  if [[ -z "${native_dir}" && -z "${native_exe}" ]]; then
+    native_dir="$(default_native_publish_dir)"
+  fi
+
+  if [[ -n "${native_dir}" ]]; then
+    [[ -d "${native_dir}" ]] || die "Local native directory not found: ${native_dir}"
+    native_exe="${native_dir}/WindowsRemoteExecutor.Native.exe"
+    if [[ -z "${everything_dll}" && -f "${native_dir}/Everything64.dll" ]]; then
+      everything_dll="${native_dir}/Everything64.dll"
+    fi
+  fi
+
+  [[ -f "${native_exe}" ]] || die "Local native exe not found: ${native_exe}"
+
+  if [[ -n "${everything_dll}" ]]; then
+    [[ -f "${everything_dll}" ]] || die "Everything64.dll not found: ${everything_dll}"
+  fi
+
+  if [[ -z "${es_exe}" ]] && default_local_es_exe >/dev/null 2>&1; then
+    es_exe="$(default_local_es_exe)"
+  fi
+
+  if [[ -n "${es_exe}" ]]; then
+    [[ -f "${es_exe}" ]] || die "es.exe not found: ${es_exe}"
+  fi
+
+  if [[ -n "${policy_file}" ]]; then
+    [[ -f "${policy_file}" ]] || die "Policy file not found: ${policy_file}"
+  fi
+
+  local stamp
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  ensure_remote_dir "${TARGET_TOOLS_DIR}"
+
+  local -a local_files=("${native_exe}")
+  if [[ -n "${everything_dll}" ]]; then
+    local_files+=("${everything_dll}")
+  fi
+  if [[ -n "${es_exe}" ]]; then
+    local_files+=("${es_exe}")
+  fi
+  if [[ -n "${policy_file}" ]]; then
+    local_files+=("${policy_file}")
+  fi
+
+  local local_path
+  for local_path in "${local_files[@]}"; do
+    local remote_name
+    if [[ -n "${policy_file}" && "${local_path}" == "${policy_file}" ]]; then
+      remote_name="$(basename "${TARGET_POLICY_PATH}")"
+    else
+      remote_name="$(basename "${local_path}")"
+    fi
+
+    scp_to_remote "${local_path}" "${TARGET_TOOLS_DIR}/${remote_name}.new-${stamp}"
+  done
+
+  local update_cmd="ver >nul"
+
+  for local_path in "${local_files[@]}"; do
+    local base_name
+    if [[ -n "${policy_file}" && "${local_path}" == "${policy_file}" ]]; then
+      base_name="$(basename "${TARGET_POLICY_PATH}")"
+    else
+      base_name="$(basename "${local_path}")"
+    fi
+    local target_remote_path="${TARGET_TOOLS_DIR}/${base_name}"
+    local target_remote_cmd
+    target_remote_cmd="$(remote_cmd_path "${target_remote_path}")"
+    local incoming_remote_cmd
+    incoming_remote_cmd="$(remote_cmd_path "${TARGET_TOOLS_DIR}/${base_name}.new-${stamp}")"
+    update_cmd+=" && (if exist ${target_remote_cmd} copy /y ${target_remote_cmd} ${target_remote_cmd}.bak-${stamp} >nul)"
+    update_cmd+=" && copy /y ${incoming_remote_cmd} ${target_remote_cmd} >nul"
+    update_cmd+=" && del /q ${incoming_remote_cmd}"
+  done
+
+  ssh_exec_cmd "${update_cmd}"
+
+  if [[ ${install_guard} -eq 1 ]]; then
+    local expected
+    expected="$(resolve_expected_listen_address "")"
+    install_guard_tasks "${expected}"
+    cmd_guard "${target}"
+  fi
+}
+
+main() {
+  require_local_deps
+
+  local subcommand="${1:-help}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  case "${subcommand}" in
+    exec)
+      cmd_exec "$@"
+      ;;
+    cmd)
+      cmd_cmd "$@"
+      ;;
+    run)
+      cmd_run "$@"
+      ;;
+    py)
+      cmd_py "$@"
+      ;;
+    find)
+      cmd_find "$@"
+      ;;
+    probe)
+      cmd_probe "$@"
+      ;;
+    guard)
+      cmd_guard "$@"
+      ;;
+    policy)
+      cmd_policy "$@"
+      ;;
+    update-tools)
+      cmd_update_tools "$@"
+      ;;
+    put)
+      cmd_put "$@"
+      ;;
+    get)
+      cmd_get "$@"
+      ;;
+    deploy)
+      cmd_deploy "$@"
+      ;;
+    ps-encode)
+      cmd_ps_encode "$@"
+      ;;
+    ps-decode)
+      cmd_ps_decode "$@"
+      ;;
+    ps-check)
+      cmd_ps_check "$@"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      die "Unknown subcommand: ${subcommand}"
+      ;;
+  esac
+}
+
+main "$@"
