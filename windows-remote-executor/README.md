@@ -12,6 +12,7 @@ The intended steady state is:
 
 - runs remote `cmd.exe` commands
 - runs remote native processes without a shell hop
+- captures remote native process output as JSON with detected encodings and raw base64 stdout/stderr bytes
 - runs remote Python scripts, including `conda run`
 - sends PowerShell as UTF-8 base64 and decodes it on Windows before launching PowerShell
 - uploads and downloads files with `scp`
@@ -61,6 +62,8 @@ Or use the native bootstrap command directly:
 
 Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, and writes a visible `cmd.exe` startup console for local recovery.
 
+The startup console launcher now re-launches itself elevated when the signed-in user is not already in an elevated shell, and the console retries `sshd` startup several times after logon. This is specifically meant to handle hosts where `sshd` can miss the first boot window while Tailscale or the bound listen address is still settling.
+
 ## Define a Target
 
 Copy the example target file:
@@ -106,6 +109,13 @@ Run native programs and Python without a shell hop:
 ```bash
 ./windows-remote-executor/bin/win-remote run winbox --cwd C:/CodexRemote/inbox whoami.exe
 ./windows-remote-executor/bin/win-remote py winbox C:/CodexRemote/inbox/echo_args.py --cwd C:/CodexRemote/inbox -- --plain alpha beta
+```
+
+Capture localized or byte-sensitive output as JSON:
+
+```bash
+./windows-remote-executor/bin/win-remote capture winbox wsl.exe --status
+./windows-remote-executor/bin/win-remote capture winbox --out ./wsl-status.json wsl.exe --status
 ```
 
 Deploy a directory and optionally run a post-step through the Windows-local PowerShell decoder:
@@ -155,12 +165,14 @@ The guard logic is intentionally conservative.
 - `public-with-token` is allowed only when the policy explicitly says so and an access token hash is configured
 - the probe and guard output always surfaces the policy label, exposure mode, and whether a token is required
 
-When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `python-b64`, `powershell-b64`, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument.
+When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument.
 
 ## Notes
 
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
 - `probe`, `run`, `py`, `exec`, `guard`, and `policy` rely on `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe`.
+- Prefer `run` for human-facing command execution and progress logs.
+- Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
 - `find` still relies on an externally staged `es.exe`.
 - The PowerShell route is now `local UTF-8 base64 -> WindowsRemoteExecutor.Native.exe powershell-b64 -> Windows-local decode -> PowerShell -EncodedCommand`, which removes one quoting layer from SSH.

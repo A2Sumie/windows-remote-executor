@@ -11,6 +11,7 @@ The current native CLI exposes:
 - `guard-sshd`
 - `probe`
 - `run-b64`
+- `capture-b64`
 - `python-b64`
 - `powershell-b64`
 - `everything-b64`
@@ -23,6 +24,20 @@ The current native CLI exposes:
 
 `run-b64`, `python-b64`, and `powershell-b64` execute payloads without depending on local shell quoting on the controlling machine.
 
+`capture-b64` executes a native process and prints one JSON object with:
+
+- `exitCode`
+- `stdoutText`
+- `stderrText`
+- `stdoutEncoding`
+- `stderrEncoding`
+- `stdoutBase64`
+- `stderrBase64`
+- `stdoutBytes`
+- `stderrBytes`
+
+Use it when output may be UTF-16, locale-codepage, or byte-sensitive and you want one machine-readable payload instead of best-effort live text.
+
 ## Access Policy
 
 `access-policy.json` is expected next to the executable. It contains:
@@ -33,7 +48,7 @@ The current native CLI exposes:
 - `accessTokenSha256`
 - `updatedAt`
 
-If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `python-b64`, `powershell-b64`, and `everything-b64`.
+If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, and `everything-b64`.
 
 `public-with-token` is only valid when a token hash exists. The intended default is still `private-only`.
 
@@ -89,6 +104,8 @@ If you need to revert a host that was already switched to a PowerShell login she
 
 - The intended steady state is "PowerShell minimized", not "PowerShell everywhere".
 - PowerShell is still available, but the wrapper now sends UTF-8 base64 bodies that are decoded on Windows before PowerShell starts.
+- `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.
+- `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.
 - Everything search still depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.

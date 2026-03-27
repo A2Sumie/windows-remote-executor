@@ -21,6 +21,8 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 ## Command Choice
 
 - Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
+- Use `win-remote run` for Windows-native platform tools such as `wsl.exe`, `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
+- Use `win-remote capture` when output encoding is unknown, localized, UTF-16-shaped, or byte-sensitive and you need stable JSON plus raw base64 bytes.
 - Use `win-remote py` for Python scripts on the Windows host.
 - Use `win-remote put` and `win-remote get` for file transfer.
 - Use `win-remote deploy` for staged directory updates.
@@ -37,6 +39,16 @@ Do not default to inline PowerShell quoting.
 - If generating PowerShell dynamically, prefer `--stdin`.
 - Only use inline PowerShell for very short commands.
 - Never bypass the wrapper and send raw `-EncodedCommand` yourself unless there is a strong reason.
+- If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
+- If the goal is WSL or Linux setup, upload a `.sh` file and invoke `wsl.exe ... bash /mnt/c/...` via `win-remote run`.
+
+## Encoding Rule
+
+- Assume localized Windows CLI output may be UTF-16 or codepage-shaped and unsuitable for parsing over SSH.
+- Treat `win-remote run` as a human-oriented, best-effort text path.
+- Use `win-remote capture` when you need exact bytes, detected encoding labels, or stable machine parsing of stdout/stderr.
+- Do not make automation decisions from mojibake text returned by `wsl.exe`, `dism.exe`, `systeminfo.exe`, or any localized CLI unless you captured bytes or emitted JSON on the Windows side.
+- Prefer JSON from Windows-local PowerShell when the result is state, and prefer `capture` when the result is process output.
 
 ## Security Rule
 

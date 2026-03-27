@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text;
 
 namespace WindowsRemoteExecutor.Native;
@@ -168,14 +169,52 @@ internal static class ExecutionCommands
     public static async Task<int> RunCommandAsync(string[] args)
     {
         var options = RunProcessOptions.FromBase64Args(args);
-        return await ProcessRunner.RunPassthroughAsync(options.FilePath, options.Arguments, options.WorkingDirectory);
+        return await ProcessRunner.RunPassthroughAsync(
+            options.FilePath,
+            options.Arguments,
+            options.WorkingDirectory,
+            OutputEncodingPreference.Auto);
+    }
+
+    public static async Task<int> CaptureCommandAsync(string[] args)
+    {
+        var options = RunProcessOptions.FromBase64Args(args);
+        var result = await ProcessRunner.RunCaptureAsync(
+            options.FilePath,
+            options.Arguments,
+            options.WorkingDirectory,
+            OutputEncodingPreference.Auto);
+
+        var payload = new
+        {
+            exitCode = result.ExitCode,
+            stdoutText = result.StdOut,
+            stderrText = result.StdErr,
+            stdoutEncoding = result.StdOutEncoding,
+            stderrEncoding = result.StdErrEncoding,
+            stdoutBase64 = Convert.ToBase64String(result.StdOutBytes),
+            stderrBase64 = Convert.ToBase64String(result.StdErrBytes),
+            stdoutBytes = result.StdOutBytes.Length,
+            stderrBytes = result.StdErrBytes.Length
+        };
+        Console.WriteLine(JsonSerializer.Serialize(payload));
+        return result.ExitCode;
     }
 
     public static async Task<int> RunPythonAsync(string[] args)
     {
         var options = PythonScriptOptions.FromBase64Args(args);
         var plan = ResolvePythonExecution(options);
-        return await ProcessRunner.RunPassthroughAsync(plan.FilePath, plan.Arguments, plan.WorkingDirectory);
+        return await ProcessRunner.RunPassthroughAsync(
+            plan.FilePath,
+            plan.Arguments,
+            plan.WorkingDirectory,
+            OutputEncodingPreference.Utf8,
+            new Dictionary<string, string?>
+            {
+                ["PYTHONUTF8"] = "1",
+                ["PYTHONIOENCODING"] = "utf-8"
+            });
     }
 
     public static async Task<int> RunPowerShellAsync(string[] args)
@@ -197,7 +236,8 @@ internal static class ExecutionCommands
                 "-EncodedCommand",
                 encodedCommand
             },
-            options.WorkingDirectory);
+            options.WorkingDirectory,
+            OutputEncodingPreference.Utf8);
     }
 
     private static RunProcessOptions ResolvePythonExecution(PythonScriptOptions options)

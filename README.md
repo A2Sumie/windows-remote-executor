@@ -10,6 +10,7 @@ The design goal is simple: keep SSH as the transport, keep PowerShell as a reluc
 ## Features
 
 - remote `cmd.exe`, native process, and Python execution
+- structured capture for localized or byte-sensitive process output
 - Windows-local PowerShell decode path for the cases where PowerShell is unavoidable
 - JSON host probing
 - staged directory deploys
@@ -53,7 +54,7 @@ If an agent opens this repository cold, the shortest safe path is:
 1. Read `AGENTS.md`.
 2. Read `windows-remote-executor/README.md`.
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
-4. Prefer `run`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, and `update-tools`.
+4. Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, and `update-tools`.
 5. Use `exec --file` only when PowerShell is actually needed.
 
 ## License

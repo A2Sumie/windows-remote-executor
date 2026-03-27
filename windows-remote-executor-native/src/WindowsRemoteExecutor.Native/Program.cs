@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text;
 
 namespace WindowsRemoteExecutor.Native;
 
@@ -14,6 +15,10 @@ internal static class Program
     {
         try
         {
+            Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+            Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+            Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
             if (args.Length == 0 || IsHelp(args[0]))
             {
                 PrintUsage();
@@ -51,6 +56,10 @@ internal static class Program
                 case "run-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
                     return await ExecutionCommands.RunCommandAsync(commandArgs);
+
+                case "capture-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.CaptureCommandAsync(commandArgs);
 
                 case "python-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
@@ -98,6 +107,7 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe guard-sshd [options]
               WindowsRemoteExecutor.Native.exe probe
               WindowsRemoteExecutor.Native.exe run-b64 [options]
+              WindowsRemoteExecutor.Native.exe capture-b64 [options]
               WindowsRemoteExecutor.Native.exe python-b64 [options]
               WindowsRemoteExecutor.Native.exe powershell-b64 [options]
               WindowsRemoteExecutor.Native.exe everything-b64 [options]
@@ -118,6 +128,11 @@ internal static class Program
               --no-disable
 
             run-b64 options:
+              --file <base64-utf8-path-or-command>
+              --cwd <base64-utf8-working-directory>
+              --arg <base64-utf8-argument>
+
+            capture-b64 options:
               --file <base64-utf8-path-or-command>
               --cwd <base64-utf8-working-directory>
               --arg <base64-utf8-argument>
