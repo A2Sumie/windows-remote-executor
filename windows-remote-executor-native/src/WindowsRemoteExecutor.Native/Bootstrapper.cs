@@ -101,6 +101,7 @@ internal sealed class BootstrapResult
     public string? DefaultShell { get; init; }
     public string StartupConsoleScript { get; init; } = string.Empty;
     public string StartupConsoleLauncher { get; init; } = string.Empty;
+    public string StartupConsoleTaskName { get; init; } = string.Empty;
     public string SshConfigPath { get; init; } = @"C:\ProgramData\ssh\sshd_config";
 }
 
@@ -108,6 +109,7 @@ internal static class Bootstrapper
 {
     private const string OpenSshCapability = "OpenSSH.Server~~~~0.0.1.0";
     private const string OpenSshFirewallRule = "Codex OpenSSH Server (Tailscale)";
+    private const string StartupConsoleTaskName = "CodexRemote Console";
     private static readonly string OpenSshConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ssh",
@@ -119,6 +121,7 @@ internal static class Bootstrapper
         EnsureAdmin();
 
         var key = options.ResolveAuthorizedKey();
+        var normalizedTargetUser = NormalizeTargetUser(options.TargetUser);
 
         WriteStep("Ensuring OpenSSH Server");
         await EnsureOpenSshServerAsync();
@@ -133,10 +136,10 @@ internal static class Bootstrapper
         EnsureCodexLayout(options.CodexRoot);
 
         WriteStep("Installing startup console");
-        var startupConsole = EnsureStartupConsole(options.CodexRoot, options.TargetUser, options.ListenAddress);
+        var startupConsole = await EnsureStartupConsoleAsync(options.CodexRoot, normalizedTargetUser, options.ListenAddress);
 
         WriteStep("Installing authorized keys");
-        EnsureAuthorizedKeys(options.TargetUser, key);
+        EnsureAuthorizedKeys(normalizedTargetUser, key);
 
         if (options.SetPowerShellDefaultShell)
         {
@@ -168,7 +171,7 @@ internal static class Bootstrapper
         var probe = ProbeCollector.Collect();
         return new BootstrapResult
         {
-            TargetUser = options.TargetUser,
+            TargetUser = normalizedTargetUser,
             ListenAddress = options.ListenAddress,
             CodexRoot = options.CodexRoot,
             OpenSshCapabilityState = await GetOpenSshCapabilityStateAsync(),
@@ -177,6 +180,7 @@ internal static class Bootstrapper
             DefaultShell = ReadDefaultShell(),
             StartupConsoleScript = startupConsole.ScriptPath,
             StartupConsoleLauncher = startupConsole.LauncherPath,
+            StartupConsoleTaskName = startupConsole.TaskName,
         };
     }
 
@@ -278,18 +282,22 @@ internal static class Bootstrapper
         Directory.CreateDirectory(Path.Combine(codexRoot, "logs"));
     }
 
-    private static StartupConsolePaths EnsureStartupConsole(string codexRoot, string targetUser, string listenAddress)
+    private static async Task<StartupConsolePaths> EnsureStartupConsoleAsync(string codexRoot, string targetUser, string listenAddress)
     {
         var scriptPath = Path.Combine(codexRoot, "tools", "codex-startup-console.cmd");
-        var startupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
+        var launcherPath = Path.Combine(codexRoot, "tools", "CodexRemote Console.cmd");
+        var legacyStartupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
 
         Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
-        Directory.CreateDirectory(Path.GetDirectoryName(startupPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(launcherPath)!);
 
         File.WriteAllText(scriptPath, BuildStartupConsoleScript(codexRoot, listenAddress), Encoding.ASCII);
-        File.WriteAllText(startupPath, BuildStartupConsoleLauncher(scriptPath), Encoding.ASCII);
+        File.WriteAllText(launcherPath, BuildStartupConsoleLauncher(StartupConsoleTaskName), Encoding.ASCII);
+        TryDeleteFile(legacyStartupPath);
+        await EnsureStartupConsoleTaskAsync(targetUser, scriptPath, StartupConsoleTaskName);
+        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", StartupConsoleTaskName });
 
-        return new StartupConsolePaths(scriptPath, startupPath);
+        return new StartupConsolePaths(scriptPath, launcherPath, StartupConsoleTaskName);
     }
 
     private static void EnsureAuthorizedKeys(string targetUser, string authorizedKey)
@@ -323,7 +331,7 @@ internal static class Bootstrapper
             }
         }
 
-        return Path.Combine(@"C:\Users", targetUser);
+        return Path.Combine(@"C:\Users", GetTargetUserLeaf(targetUser));
     }
 
     private static string GetStartupFolderPath(string targetUser)
@@ -341,6 +349,9 @@ internal static class Bootstrapper
 
     private static string BuildStartupConsoleScript(string codexRoot, string listenAddress)
     {
+        var nativeExePath = ToWindowsCmdPath(Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe"));
+        var repairLogPath = ToWindowsCmdPath(Path.Combine(codexRoot, "logs", "sshd-repair.log"));
+        var rootPath = ToWindowsCmdPath(codexRoot);
         var lines = new[]
         {
             "@echo off",
@@ -349,12 +360,18 @@ internal static class Bootstrapper
             "echo Host: %COMPUTERNAME%",
             "for /f \"delims=\" %%I in ('whoami') do echo User: %%I",
             $"echo Listen: {listenAddress}:22",
-            $"echo Root: {codexRoot}",
+            $"echo Root: {rootPath}",
             "echo.",
             "set \"CODEX_SSHD_ATTEMPTS=6\"",
+            "set \"CODEX_REPAIR_ATTEMPTED=0\"",
+            $"set \"CODEX_NATIVE_EXE={nativeExePath}\"",
+            $"set \"CODEX_SSH_REPAIR_LOG={repairLogPath}\"",
             "if exist \"%SystemRoot%\\System32\\OpenSSH\\sshd.exe\" (",
             "  \"%SystemRoot%\\System32\\OpenSSH\\sshd.exe\" -t >nul 2>nul",
-            "  if errorlevel 1 echo WARNING: sshd.exe -t reported a configuration error.",
+            "  if errorlevel 1 (",
+            "    echo sshd validation failed, attempting automatic repair...",
+            "    call :repair_sshd",
+            "  )",
             ")",
             "echo.",
             "sc.exe query Tailscale >nul 2>nul",
@@ -376,6 +393,11 @@ internal static class Bootstrapper
             "    ping -n 4 127.0.0.1 >nul",
             "  )",
             ")",
+            "sc.exe query sshd | find \"RUNNING\" >nul",
+            "if errorlevel 1 (",
+            "  echo sshd is still not running, attempting automatic repair...",
+            "  call :repair_sshd",
+            ")",
             ":sshd_started",
             "echo.",
             "echo Service status:",
@@ -392,28 +414,86 @@ internal static class Bootstrapper
             "echo.",
             "echo This window stays open for local recovery commands.",
             "prompt CodexRemote $P$G",
+            "goto :eof",
+            string.Empty,
+            ":repair_sshd",
+            "if \"%CODEX_REPAIR_ATTEMPTED%\"==\"1\" goto :eof",
+            "set \"CODEX_REPAIR_ATTEMPTED=1\"",
+            "if not exist \"%CODEX_NATIVE_EXE%\" (",
+            "  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.",
+            "  goto :eof",
+            ")",
+            "\"%CODEX_NATIVE_EXE%\" repair-sshd --expected-listen-address " + listenAddress + " --log-path \"%CODEX_SSH_REPAIR_LOG%\"",
             string.Empty
         };
 
         return string.Join("\r\n", lines);
     }
 
-    private static string BuildStartupConsoleLauncher(string scriptPath)
+    private static async Task EnsureStartupConsoleTaskAsync(string targetUser, string scriptPath, string taskName)
+    {
+        var command = BuildStartupConsoleTaskCommand(scriptPath);
+        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Delete", "/TN", taskName, "/F" });
+        await RunRequiredAsync(
+            "schtasks.exe",
+            new[]
+            {
+                "/Create",
+                "/TN",
+                taskName,
+                "/SC",
+                "ONLOGON",
+                "/RU",
+                targetUser,
+                "/RL",
+                "HIGHEST",
+                "/IT",
+                "/TR",
+                command,
+                "/F"
+            });
+    }
+
+    private static string BuildStartupConsoleTaskCommand(string scriptPath)
+    {
+        var cmdPath = Environment.GetEnvironmentVariable("ComSpec");
+        if (string.IsNullOrWhiteSpace(cmdPath))
+        {
+            cmdPath = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        }
+
+        return $"\"{cmdPath}\" /k \"{scriptPath}\"";
+    }
+
+    private static string BuildStartupConsoleLauncher(string taskName)
     {
         var lines = new[]
         {
             "@echo off",
-            "powershell.exe -NoProfile -Command \"if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }\" >nul 2>nul",
+            $"schtasks.exe /Run /TN \"{taskName}\" >nul 2>nul",
             "if errorlevel 1 (",
-            "  echo Requesting elevation for CodexRemote Console...",
-            $"  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Start-Process -WindowStyle Maximized -FilePath $env:ComSpec -ArgumentList @('/k','{scriptPath}') -Verb RunAs\"",
-            "  exit /b",
+            $"  echo Scheduled task \"{taskName}\" was not found or could not be started.",
+            "  exit /b 1",
             ")",
-            $"start \"CodexRemote Console\" /max cmd.exe /k \"{scriptPath}\"",
             string.Empty
         };
 
         return string.Join("\r\n", lines);
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Best effort cleanup of the legacy Startup-folder launcher.
+        }
     }
 
     private static void AppendUniqueLine(string filePath, string value)
@@ -528,7 +608,57 @@ internal static class Bootstrapper
         Console.Error.WriteLine($"==> {message}");
     }
 
+    private static string NormalizeTargetUser(string targetUser)
+    {
+        if (string.IsNullOrWhiteSpace(targetUser))
+        {
+            return $@"{Environment.MachineName}\{Environment.UserName}";
+        }
+
+        var candidates = targetUser.Contains('\\') || targetUser.Contains('@')
+            ? new[] { targetUser }
+            : new[] { $@"{Environment.MachineName}\{targetUser}", targetUser };
+
+        foreach (var candidate in candidates)
+        {
+            try
+            {
+                var sid = (SecurityIdentifier)new NTAccount(candidate).Translate(typeof(SecurityIdentifier));
+                var account = (NTAccount)sid.Translate(typeof(NTAccount));
+                return account.Value;
+            }
+            catch
+            {
+                // Try the next candidate.
+            }
+        }
+
+        return targetUser;
+    }
+
+    private static string GetTargetUserLeaf(string targetUser)
+    {
+        if (string.IsNullOrWhiteSpace(targetUser))
+        {
+            return Environment.UserName;
+        }
+
+        var separators = new[] { '\\', '/' };
+        var leaf = targetUser.Split(separators, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return string.IsNullOrWhiteSpace(leaf) ? targetUser : leaf;
+    }
+
+    private static string ToWindowsCmdPath(string path)
+    {
+        return path.Replace('/', '\\');
+    }
+
     private static async Task<ProcessResult> RunProcessAllowFailureAsync(string fileName, string arguments)
+    {
+        return await ProcessRunner.RunAsync(fileName, arguments, throwOnFailure: false);
+    }
+
+    private static async Task<ProcessResult> RunProcessAllowFailureAsync(string fileName, IReadOnlyList<string> arguments)
     {
         return await ProcessRunner.RunAsync(fileName, arguments, throwOnFailure: false);
     }
@@ -537,6 +667,11 @@ internal static class Bootstrapper
     {
         return await ProcessRunner.RunAsync(fileName, arguments, throwOnFailure: true);
     }
+
+    private static async Task<ProcessResult> RunRequiredAsync(string fileName, IReadOnlyList<string> arguments)
+    {
+        return await ProcessRunner.RunAsync(fileName, arguments, throwOnFailure: true);
+    }
 }
 
-internal sealed record StartupConsolePaths(string ScriptPath, string LauncherPath);
+internal sealed record StartupConsolePaths(string ScriptPath, string LauncherPath, string TaskName);

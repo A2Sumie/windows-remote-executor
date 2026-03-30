@@ -29,6 +29,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote update-tools` to replace the Windows-side executor itself.
 - Use `win-remote policy` to install or rotate `access-policy.json`.
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
+- Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
 - Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell is specifically required.
 
 ## PowerShell Rule

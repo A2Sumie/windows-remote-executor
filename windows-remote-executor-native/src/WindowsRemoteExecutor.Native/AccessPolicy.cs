@@ -122,6 +122,7 @@ internal static class ExecutorAccessControl
         {
             "probe" => true,
             "run-b64" => true,
+            "capture-b64" => true,
             "python-b64" => true,
             "powershell-b64" => true,
             "everything-b64" => true,

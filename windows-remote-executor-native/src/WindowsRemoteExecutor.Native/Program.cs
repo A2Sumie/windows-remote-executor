@@ -47,6 +47,9 @@ internal static class Program
                 case "guard-sshd":
                     return await SshExposureGuard.RunCommandAsync(commandArgs);
 
+                case "repair-sshd":
+                    return await SshRepair.RunCommandAsync(commandArgs);
+
                 case "probe":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
                     var probe = ProbeCollector.Collect();
@@ -105,6 +108,7 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe bootstrap [options]
               WindowsRemoteExecutor.Native.exe bootstrap-x570 [options]   (legacy alias)
               WindowsRemoteExecutor.Native.exe guard-sshd [options]
+              WindowsRemoteExecutor.Native.exe repair-sshd [options]
               WindowsRemoteExecutor.Native.exe probe
               WindowsRemoteExecutor.Native.exe run-b64 [options]
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
@@ -126,6 +130,12 @@ internal static class Program
               --expected-listen-address <ip>
               --log-path <path>
               --no-disable
+
+            repair-sshd options:
+              --expected-listen-address <ip>
+              --codex-root <path>
+              --log-path <path>
+              --force-rewrite
 
             run-b64 options:
               --file <base64-utf8-path-or-command>

@@ -9,6 +9,7 @@ The current native CLI exposes:
 - `bootstrap`
 - `bootstrap-x570` as a legacy alias
 - `guard-sshd`
+- `repair-sshd`
 - `probe`
 - `run-b64`
 - `capture-b64`
@@ -16,9 +17,11 @@ The current native CLI exposes:
 - `powershell-b64`
 - `everything-b64`
 
-`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, creates a visible `cmd.exe` startup console for the target user, configures service startup, and starts `sshd`.
+`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, creates a visible `cmd.exe` recovery console for the target user, installs that console as a highest-privilege `ONLOGON` scheduled task, configures service startup, and starts `sshd`.
 
 `guard-sshd` reads `access-policy.json`, checks configured and active `sshd` listeners, and disables the service when the host is in an unsafe state.
+
+`repair-sshd` revalidates `sshd`, rewrites a known-good managed `sshd_config` when needed, regenerates host keys, reapplies scoped firewall and service settings, and brings the service back to `Running`.
 
 `probe` returns machine state plus the active exposure policy label, listen addresses, and whether an access token is required.
 
@@ -92,6 +95,7 @@ Run from an elevated shell:
 
 .\WindowsRemoteExecutor.Native.exe probe
 .\WindowsRemoteExecutor.Native.exe guard-sshd --expected-listen-address 100.101.102.103
+.\WindowsRemoteExecutor.Native.exe repair-sshd --expected-listen-address 100.101.102.103
 ```
 
 If you need to revert a host that was already switched to a PowerShell login shell:
@@ -108,4 +112,5 @@ If you need to revert a host that was already switched to a PowerShell login she
 - `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.
+- The recovery console self-checks `sshd.exe -t` at logon and invokes `repair-sshd` automatically if validation fails or the service will not come up.
 - Everything search still depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.

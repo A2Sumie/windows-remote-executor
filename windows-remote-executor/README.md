@@ -60,9 +60,11 @@ Or use the native bootstrap command directly:
   --listen-address 100.101.102.103
 ```
 
-Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, and writes a visible `cmd.exe` startup console for local recovery.
+Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, and installs a visible `cmd.exe` recovery console path for local login sessions.
 
-The startup console launcher now re-launches itself elevated when the signed-in user is not already in an elevated shell, and the console retries `sshd` startup several times after logon. This is specifically meant to handle hosts where `sshd` can miss the first boot window while Tailscale or the bound listen address is still settling.
+The recovery console is now launched by a highest-privilege `ONLOGON` scheduled task for the target user instead of a Startup-folder `RunAs` prompt. That removes the manual UAC click at sign-in while still giving the signed-in user a visible local console. A helper launcher remains in `C:\CodexRemote\tools\CodexRemote Console.cmd` and simply triggers the scheduled task on demand.
+
+At logon the recovery console validates `sshd.exe -t`, retries service startup, and invokes `WindowsRemoteExecutor.Native.exe repair-sshd` automatically if the config is invalid or `sshd` still does not come up.
 
 ## Define a Target
 
@@ -138,6 +140,7 @@ Install or refresh the remote access policy and guard:
 ```bash
 ./windows-remote-executor/bin/win-remote policy winbox
 ./windows-remote-executor/bin/win-remote guard winbox
+./windows-remote-executor/bin/win-remote repair winbox
 ```
 
 Rotate the local token and re-install the policy:
@@ -170,7 +173,8 @@ When `access-policy.json` contains an access token hash, native commands such as
 ## Notes
 
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
-- `probe`, `run`, `py`, `exec`, `guard`, and `policy` rely on `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe`.
+- `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` rely on `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe`.
+- `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.

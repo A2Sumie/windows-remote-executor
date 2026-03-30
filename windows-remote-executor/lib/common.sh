@@ -90,6 +90,7 @@ load_target() {
   TARGET_STAGE_ROOT="$(normalize_remote_path "${TARGET_STAGE_ROOT:-C:/CodexRemote/staging}")"
   TARGET_POLICY_PATH="$(normalize_remote_path "${TARGET_POLICY_PATH:-${TARGET_TOOLS_DIR}/access-policy.json}")"
   TARGET_GUARD_LOG_PATH="$(normalize_remote_path "${TARGET_GUARD_LOG_PATH:-C:/CodexRemote/logs/sshd-guard.log}")"
+  TARGET_REPAIR_LOG_PATH="$(normalize_remote_path "${TARGET_REPAIR_LOG_PATH:-C:/CodexRemote/logs/sshd-repair.log}")"
   TARGET_EXPECTED_LISTEN_ADDRESS="${TARGET_EXPECTED_LISTEN_ADDRESS:-}"
   TARGET_EXPOSURE_MODE="${TARGET_EXPOSURE_MODE:-private-only}"
   TARGET_POLICY_LABEL="${TARGET_POLICY_LABEL:-}"

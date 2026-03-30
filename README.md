@@ -18,6 +18,7 @@ The design goal is simple: keep SSH as the transport, keep PowerShell as a reluc
 - private-network policy enforcement
 - optional access-token requirement for native commands
 - automatic `sshd` disablement when listener exposure drifts outside policy
+- explicit `repair-sshd` / `win-remote repair` self-heal for config or startup drift
 
 ## Security
 
@@ -54,7 +55,7 @@ If an agent opens this repository cold, the shortest safe path is:
 1. Read `AGENTS.md`.
 2. Read `windows-remote-executor/README.md`.
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
-4. Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, and `update-tools`.
+4. Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, and `update-tools`.
 5. Use `exec --file` only when PowerShell is actually needed.
 
 ## License

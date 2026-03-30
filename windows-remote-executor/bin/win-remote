@@ -19,6 +19,7 @@ Usage:
   win-remote find <target> <query> [--max <count>]
   win-remote probe <target> [--out <local-json-file>]
   win-remote guard <target> [--out <local-json-file>] [--no-disable] [--expected-listen-address <ip>]
+  win-remote repair <target> [--out <local-json-file>] [--expected-listen-address <ip>] [--force-rewrite]
   win-remote policy <target> [--mode <private-only|public-with-token>] [--expected-listen-address <ip>] [--label <text>] [--token <plain-token> | --rotate-token] [--skip-guard-install] [--no-run-guard]
   win-remote update-tools <target> [--native-dir <local-dir> | --native-exe <local-exe>] [--everything-dll <local-dll>] [--es-exe <local-es>] [--policy-file <local-json>] [--install-guard]
   win-remote put <target> <local-path> <remote-path>
@@ -593,6 +594,61 @@ cmd_guard() {
   printf '%s\n' "${guard_output}"
 }
 
+cmd_repair() {
+  [[ $# -ge 1 ]] || die "repair requires <target>"
+  local target="$1"
+  shift
+  local out_file=""
+  local expected_override=""
+  local force_rewrite=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a file path"
+        out_file="$2"
+        shift 2
+        ;;
+      --expected-listen-address)
+        [[ $# -ge 2 ]] || die "--expected-listen-address requires an IPv4 address"
+        expected_override="$2"
+        shift 2
+        ;;
+      --force-rewrite)
+        force_rewrite=1
+        shift
+        ;;
+      *)
+        die "Unknown repair option: $1"
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  local expected
+  expected="$(resolve_expected_listen_address "${expected_override}")"
+  local -a native_tokens=("repair-sshd" "--expected-listen-address" "${expected}" "--log-path" "${TARGET_REPAIR_LOG_PATH}")
+  if [[ ${force_rewrite} -eq 1 ]]; then
+    native_tokens+=("--force-rewrite")
+  fi
+
+  local repair_output=""
+  if repair_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    :
+  else
+    local status=$?
+    printf '%s\n' "${repair_output}"
+    return "${status}"
+  fi
+
+  if [[ -n "${out_file}" ]]; then
+    printf '%s\n' "${repair_output}" | tee "${out_file}"
+    return
+  fi
+
+  printf '%s\n' "${repair_output}"
+}
+
 cmd_policy() {
   [[ $# -ge 1 ]] || die "policy requires <target>"
   local target="$1"
@@ -1036,6 +1092,9 @@ main() {
       ;;
     guard)
       cmd_guard "$@"
+      ;;
+    repair)
+      cmd_repair "$@"
       ;;
     policy)
       cmd_policy "$@"

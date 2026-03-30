@@ -24,6 +24,44 @@ function Assert-Admin {
     }
 }
 
+function Get-LeafUserName {
+    param([string]$UserName)
+
+    if (-not $UserName) {
+        return $env:USERNAME
+    }
+
+    $parts = $UserName -split '[\\/]'
+    return ($parts | Where-Object { $_ } | Select-Object -Last 1)
+}
+
+function Resolve-CanonicalUserName {
+    param([string]$UserName)
+
+    if (-not $UserName) {
+        return ('{0}\{1}' -f $env:COMPUTERNAME, $env:USERNAME)
+    }
+
+    $candidates = @()
+    if ($UserName -match '[\\@]') {
+        $candidates += $UserName
+    } else {
+        $candidates += ('{0}\{1}' -f $env:COMPUTERNAME, $UserName)
+        $candidates += $UserName
+    }
+
+    foreach ($candidate in $candidates) {
+        try {
+            $principal = New-Object Security.Principal.NTAccount($candidate)
+            $sid = $principal.Translate([Security.Principal.SecurityIdentifier])
+            return $sid.Translate([Security.Principal.NTAccount]).Value
+        } catch {
+        }
+    }
+
+    return $UserName
+}
+
 function Ensure-OpenSSHServer {
     $capability = Get-WindowsCapability -Online | Where-Object Name -like 'OpenSSH.Server*'
     if ($null -eq $capability) {
@@ -203,7 +241,7 @@ function Ensure-AuthorizedKeys {
         $userProfile = (Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue | Where-Object SID -eq $sid).LocalPath |
             Select-Object -First 1
         if (-not $userProfile) {
-            $userProfile = "C:\Users\$TargetUser"
+            $userProfile = 'C:\Users\{0}' -f (Get-LeafUserName -UserName $TargetUser)
         }
 
         $userKeyPath = Join-Path $userProfile '.ssh\authorized_keys'
@@ -230,7 +268,7 @@ function Resolve-UserProfilePath {
     $userProfile = (Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue | Where-Object SID -eq $sid).LocalPath |
         Select-Object -First 1
     if (-not $userProfile) {
-        $userProfile = "C:\Users\$UserName"
+        $userProfile = 'C:\Users\{0}' -f (Get-LeafUserName -UserName $UserName)
     }
 
     return $userProfile
@@ -253,6 +291,21 @@ function Ensure-CodexLayout {
     }
 }
 
+function Ensure-StartupConsoleTask {
+    param(
+        [string]$TaskName,
+        [string]$UserName,
+        [string]$ScriptPath
+    )
+
+    $cmdPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $taskCommand = ('"{0}" /k "{1}"' -f $cmdPath, $ScriptPath)
+
+    & schtasks.exe /Delete /TN $TaskName /F *> $null
+    & schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $UserName /RL HIGHEST /IT /TR $taskCommand /F | Out-Null
+    & schtasks.exe /Run /TN $TaskName *> $null
+}
+
 function Ensure-StartupConsole {
     param(
         [string]$Root,
@@ -261,11 +314,15 @@ function Ensure-StartupConsole {
     )
 
     $toolsScriptPath = Join-Path (Join-Path $Root 'tools') 'codex-startup-console.cmd'
+    $launcherPath = Join-Path (Join-Path $Root 'tools') 'CodexRemote Console.cmd'
     $startupDir = Join-Path (Resolve-UserProfilePath -UserName $UserName) 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
-    $launcherPath = Join-Path $startupDir 'CodexRemote Console.cmd'
+    $legacyStartupPath = Join-Path $startupDir 'CodexRemote Console.cmd'
+    $taskName = 'CodexRemote Console'
+    $nativeExePath = Join-Path (Join-Path $Root 'tools') 'WindowsRemoteExecutor.Native.exe'
+    $repairLogPath = Join-Path (Join-Path $Root 'logs') 'sshd-repair.log'
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $toolsScriptPath) | Out-Null
-    New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $launcherPath) | Out-Null
 
     $scriptContent = @(
         '@echo off',
@@ -277,9 +334,15 @@ function Ensure-StartupConsole {
         "echo Root: $Root",
         'echo.',
         'set "CODEX_SSHD_ATTEMPTS=6"',
+        'set "CODEX_REPAIR_ATTEMPTED=0"',
+        "set ""CODEX_NATIVE_EXE=$nativeExePath""",
+        "set ""CODEX_SSH_REPAIR_LOG=$repairLogPath""",
         'if exist "%SystemRoot%\System32\OpenSSH\sshd.exe" (',
         '  "%SystemRoot%\System32\OpenSSH\sshd.exe" -t >nul 2>nul',
-        '  if errorlevel 1 echo WARNING: sshd.exe -t reported a configuration error.',
+        '  if errorlevel 1 (',
+        '    echo sshd validation failed, attempting automatic repair...',
+        '    call :repair_sshd',
+        '  )',
         ')',
         'echo.',
         'sc.exe query Tailscale >nul 2>nul',
@@ -301,6 +364,11 @@ function Ensure-StartupConsole {
         '    ping -n 4 127.0.0.1 >nul',
         '  )',
         ')',
+        'sc.exe query sshd | find "RUNNING" >nul',
+        'if errorlevel 1 (',
+        '  echo sshd is still not running, attempting automatic repair...',
+        '  call :repair_sshd',
+        ')',
         ':sshd_started',
         'echo.',
         'echo Service status:',
@@ -317,27 +385,40 @@ function Ensure-StartupConsole {
         'echo.',
         'echo This window stays open for local recovery commands.',
         'prompt CodexRemote $P$G',
+        'goto :eof',
+        '',
+        ':repair_sshd',
+        'if "%CODEX_REPAIR_ATTEMPTED%"=="1" goto :eof',
+        'set "CODEX_REPAIR_ATTEMPTED=1"',
+        'if not exist "%CODEX_NATIVE_EXE%" (',
+        '  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.',
+        '  goto :eof',
+        ')',
+        """%CODEX_NATIVE_EXE%"" repair-sshd --expected-listen-address $ListenAddress --log-path ""%CODEX_SSH_REPAIR_LOG%""",
         ''
     ) -join "`r`n"
 
     $launcherContent = @(
         '@echo off',
-        'powershell.exe -NoProfile -Command "if ((New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { exit 0 } else { exit 1 }" >nul 2>nul',
+        "schtasks.exe /Run /TN ""$taskName"" >nul 2>nul",
         'if errorlevel 1 (',
-        '  echo Requesting elevation for CodexRemote Console...',
-        "  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command ""Start-Process -WindowStyle Maximized -FilePath `$env:ComSpec -ArgumentList @('/k','$toolsScriptPath') -Verb RunAs""",
-        '  exit /b',
+        "  echo Scheduled task ""$taskName"" was not found or could not be started.",
+        '  exit /b 1',
         ')',
-        "start ""CodexRemote Console"" /max cmd.exe /k ""$toolsScriptPath""",
         ''
     ) -join "`r`n"
 
     Set-Content -LiteralPath $toolsScriptPath -Value $scriptContent -Encoding ascii
     Set-Content -LiteralPath $launcherPath -Value $launcherContent -Encoding ascii
+    if (Test-Path -LiteralPath $legacyStartupPath) {
+        Remove-Item -LiteralPath $legacyStartupPath -Force -ErrorAction SilentlyContinue
+    }
+    Ensure-StartupConsoleTask -TaskName $taskName -UserName $UserName -ScriptPath $toolsScriptPath
 
     return [ordered]@{
         script_path = $toolsScriptPath
         launcher_path = $launcherPath
+        task_name = $taskName
     }
 }
 
@@ -363,6 +444,7 @@ function Ensure-Tailscale {
 }
 
 Assert-Admin
+$TargetUser = Resolve-CanonicalUserName -UserName $TargetUser
 Write-Step 'Ensuring OpenSSH Server'
 Ensure-OpenSSHServer
 Write-Step 'Applying SSH listen address and firewall scope'
