@@ -111,6 +111,8 @@ internal static class Bootstrapper
     private const string OpenSshCapability = "OpenSSH.Server~~~~0.0.1.0";
     private const string OpenSshFirewallRule = "Codex OpenSSH Server (Tailscale)";
     private const string StartupConsoleTaskName = "CodexRemote Console";
+    private const string RepairStartupTaskName = "CodexRemote Sshd Repair Startup";
+    private const string RepairWatchTaskName = "CodexRemote Sshd Repair Watch";
     private static readonly string OpenSshConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ssh",
@@ -138,6 +140,9 @@ internal static class Bootstrapper
 
         WriteStep("Installing startup console");
         var startupConsole = await EnsureStartupConsoleAsync(options.CodexRoot, normalizedTargetUser, options.ListenAddress);
+
+        WriteStep("Installing sshd repair watch");
+        await EnsureSshRepairTasksAsync(startupConsole.RepairScriptPath);
 
         WriteStep("Installing authorized keys");
         EnsureAuthorizedKeys(normalizedTargetUser, key);
@@ -463,6 +468,49 @@ internal static class Bootstrapper
             });
     }
 
+    private static async Task EnsureSshRepairTasksAsync(string repairScriptPath)
+    {
+        var command = BuildNonInteractiveCmdTaskCommand(repairScriptPath);
+        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Delete", "/TN", RepairStartupTaskName, "/F" });
+        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Delete", "/TN", RepairWatchTaskName, "/F" });
+
+        await RunRequiredAsync(
+            "schtasks.exe",
+            new[]
+            {
+                "/Create",
+                "/TN",
+                RepairStartupTaskName,
+                "/SC",
+                "ONSTART",
+                "/RU",
+                "SYSTEM",
+                "/TR",
+                command,
+                "/F"
+            });
+
+        await RunRequiredAsync(
+            "schtasks.exe",
+            new[]
+            {
+                "/Create",
+                "/TN",
+                RepairWatchTaskName,
+                "/SC",
+                "MINUTE",
+                "/MO",
+                "5",
+                "/RU",
+                "SYSTEM",
+                "/TR",
+                command,
+                "/F"
+            });
+
+        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", RepairWatchTaskName });
+    }
+
     private static string BuildStartupConsoleTaskCommand(string scriptPath)
     {
         var cmdPath = Environment.GetEnvironmentVariable("ComSpec");
@@ -472,6 +520,17 @@ internal static class Bootstrapper
         }
 
         return $"\"{cmdPath}\" /k \"{scriptPath}\"";
+    }
+
+    private static string BuildNonInteractiveCmdTaskCommand(string scriptPath)
+    {
+        var cmdPath = Environment.GetEnvironmentVariable("ComSpec");
+        if (string.IsNullOrWhiteSpace(cmdPath))
+        {
+            cmdPath = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        }
+
+        return $"\"{cmdPath}\" /c \"{scriptPath}\"";
     }
 
     private static string BuildStartupConsoleLauncher(string taskName)
@@ -584,6 +643,8 @@ internal static class Bootstrapper
         }
 
         await RunRequiredAsync("cmd.exe", "/c sc.exe config sshd start= auto");
+        await RunRequiredAsync("cmd.exe", "/c sc.exe failure sshd reset= 86400 actions= restart/5000/restart/15000/restart/30000");
+        await RunProcessAllowFailureAsync("cmd.exe", "/c sc.exe failureflag sshd 1");
         await RunRequiredAsync("reg.exe", @"add HKLM\SYSTEM\CurrentControlSet\Services\sshd /v DelayedAutostart /t REG_DWORD /d 0 /f");
     }
 

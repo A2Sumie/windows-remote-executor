@@ -17,7 +17,7 @@ The current native CLI exposes:
 - `powershell-b64`
 - `everything-b64`
 
-`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, creates a visible `cmd.exe` recovery console for the target user, installs that console as a highest-privilege `ONLOGON` scheduled task, configures service startup, and starts `sshd`.
+`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, creates a visible `cmd.exe` recovery console for the target user, installs that console as a highest-privilege `ONLOGON` scheduled task, installs `sshd` repair watch tasks, configures service startup and recovery actions, and starts `sshd`.
 
 `guard-sshd` reads `access-policy.json`, checks configured and active `sshd` listeners, and disables the service when the host is in an unsafe state.
 
@@ -107,11 +107,13 @@ If you need to revert a host that was already switched to a PowerShell login she
 ## Notes
 
 - The intended steady state is "PowerShell minimized", not "PowerShell everywhere".
-- PowerShell is still available, but the wrapper now sends UTF-8 base64 bodies that are decoded on Windows before PowerShell starts.
+- PowerShell is still available, but it is expected to arrive only through the wrapper's UTF-8/base64 transport before PowerShell starts.
+- Raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport are outside the supported path.
 - `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.
 - `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.
 - The recovery console self-checks `sshd.exe -t` at logon and invokes `repair-sshd` automatically if validation fails or the service will not come up.
 - The generated startup console now delegates repair through a separate `codex-repair-sshd.cmd` helper so recovery stays predictable under `cmd.exe` batch parsing.
+- `sshd` also gets Windows service recovery actions plus scheduled repair watch tasks so a later service stop is less likely to strand the host.
 - Everything search still depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.

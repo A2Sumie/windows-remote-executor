@@ -364,6 +364,11 @@ internal static class SshRepair
 
         await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe config sshd start= auto", throwOnFailure: true);
         await ProcessRunner.RunAsync(
+            "cmd.exe",
+            "/c sc.exe failure sshd reset= 86400 actions= restart/5000/restart/15000/restart/30000",
+            throwOnFailure: true);
+        await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe failureflag sshd 1", throwOnFailure: false);
+        await ProcessRunner.RunAsync(
             "reg.exe",
             @"add HKLM\SYSTEM\CurrentControlSet\Services\sshd /v DelayedAutostart /t REG_DWORD /d 0 /f",
             throwOnFailure: true);

@@ -108,6 +108,11 @@ function Ensure-ServiceStartup {
     }
 }
 
+function Ensure-SshRecoveryActions {
+    & sc.exe failure sshd reset= 86400 actions= restart/5000/restart/15000/restart/30000 | Out-Null
+    & sc.exe failureflag sshd 1 | Out-Null
+}
+
 function Ensure-SshDependsOnTailscale {
     $tailscale = Get-Service -Name Tailscale -ErrorAction SilentlyContinue
     if (-not $tailscale) {
@@ -306,6 +311,19 @@ function Ensure-StartupConsoleTask {
     & schtasks.exe /Run /TN $TaskName *> $null
 }
 
+function Ensure-SshRepairTasks {
+    param([string]$RepairScriptPath)
+
+    $cmdPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $taskCommand = ('"{0}" /c "{1}"' -f $cmdPath, $RepairScriptPath)
+
+    & schtasks.exe /Delete /TN 'CodexRemote Sshd Repair Startup' /F *> $null
+    & schtasks.exe /Delete /TN 'CodexRemote Sshd Repair Watch' /F *> $null
+    & schtasks.exe /Create /TN 'CodexRemote Sshd Repair Startup' /SC ONSTART /RU SYSTEM /TR $taskCommand /F | Out-Null
+    & schtasks.exe /Create /TN 'CodexRemote Sshd Repair Watch' /SC MINUTE /MO 5 /RU SYSTEM /TR $taskCommand /F | Out-Null
+    & schtasks.exe /Run /TN 'CodexRemote Sshd Repair Watch' *> $null
+}
+
 function Ensure-StartupConsole {
     param(
         [string]$Root,
@@ -415,6 +433,7 @@ function Ensure-StartupConsole {
         Remove-Item -LiteralPath $legacyStartupPath -Force -ErrorAction SilentlyContinue
     }
     Ensure-StartupConsoleTask -TaskName $taskName -UserName $UserName -ScriptPath $toolsScriptPath
+    Ensure-SshRepairTasks -RepairScriptPath $repairScriptPath
 
     return [ordered]@{
         script_path = $toolsScriptPath
@@ -473,6 +492,7 @@ Write-Step 'Configuring service startup order'
 Ensure-ServiceStartup -Name Tailscale -StartMode auto
 Ensure-ServiceStartup -Name sshd -StartMode auto
 Ensure-SshDependsOnTailscale
+Ensure-SshRecoveryActions
 
 Write-Step 'Restarting sshd'
 Restart-Service sshd

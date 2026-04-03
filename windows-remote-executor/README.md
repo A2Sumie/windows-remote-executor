@@ -5,7 +5,7 @@ This toolkit lets a macOS or Linux shell drive a Windows machine over SSH withou
 The intended steady state is:
 
 - `cmd.exe`, `scp`, and a native Windows executor for routine work
-- PowerShell only when the task is specifically PowerShell-shaped
+- PowerShell only when the task is specifically PowerShell-shaped, and only through the wrapper's UTF-8/base64 path
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
 ## What It Does
@@ -20,6 +20,7 @@ The intended steady state is:
 - deploys a directory through a remote staging area
 - installs an access policy with an optional access token hash
 - installs an `sshd` guard that disables the service if it listens on an unexpected address
+- installs `sshd` repair watch tasks and service recovery actions
 - hot-updates the remote tool directory with backups
 
 ## Directory Layout
@@ -165,6 +166,7 @@ The guard logic is intentionally conservative.
 - loopback and link-local are accepted for local recovery scenarios
 - wildcard listeners such as `0.0.0.0` and `::` are treated as unsafe
 - if `sshd` drifts away from the expected listen address, `guard-sshd` stops the service and changes startup to demand
+- `sshd` is configured with Windows service failure restart actions and a repair watch scheduled task
 - `public-with-token` is allowed only when the policy explicitly says so and an access token hash is configured
 - the probe and guard output always surfaces the policy label, exposure mode, and whether a token is required
 
@@ -178,5 +180,6 @@ When `access-policy.json` contains an access token hash, native commands such as
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
+- Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. Use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.
 - `find` still relies on an externally staged `es.exe`.
 - The PowerShell route is now `local UTF-8 base64 -> WindowsRemoteExecutor.Native.exe powershell-b64 -> Windows-local decode -> PowerShell -EncodedCommand`, which removes one quoting layer from SSH.

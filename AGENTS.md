@@ -31,15 +31,16 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
 - Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
 - Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell is specifically required.
+- Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's UTF-8/base64 transport.
 
 ## PowerShell Rule
 
-Do not default to inline PowerShell quoting.
+Treat raw PowerShell command lines as disallowed.
 
 - Prefer `win-remote exec --file script.ps1`.
 - If generating PowerShell dynamically, prefer `--stdin`.
-- Only use inline PowerShell for very short commands.
-- Never bypass the wrapper and send raw `-EncodedCommand` yourself unless there is a strong reason.
+- Do not use inline PowerShell as a normal control path.
+- Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
 - If the goal is WSL or Linux setup, upload a `.sh` file and invoke `wsl.exe ... bash /mnt/c/...` via `win-remote run`.
 
