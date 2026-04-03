@@ -101,6 +101,7 @@ internal sealed class BootstrapResult
     public string? DefaultShell { get; init; }
     public string StartupConsoleScript { get; init; } = string.Empty;
     public string StartupConsoleLauncher { get; init; } = string.Empty;
+    public string StartupConsoleRepairScript { get; init; } = string.Empty;
     public string StartupConsoleTaskName { get; init; } = string.Empty;
     public string SshConfigPath { get; init; } = @"C:\ProgramData\ssh\sshd_config";
 }
@@ -180,6 +181,7 @@ internal static class Bootstrapper
             DefaultShell = ReadDefaultShell(),
             StartupConsoleScript = startupConsole.ScriptPath,
             StartupConsoleLauncher = startupConsole.LauncherPath,
+            StartupConsoleRepairScript = startupConsole.RepairScriptPath,
             StartupConsoleTaskName = startupConsole.TaskName,
         };
     }
@@ -286,18 +288,20 @@ internal static class Bootstrapper
     {
         var scriptPath = Path.Combine(codexRoot, "tools", "codex-startup-console.cmd");
         var launcherPath = Path.Combine(codexRoot, "tools", "CodexRemote Console.cmd");
+        var repairScriptPath = Path.Combine(codexRoot, "tools", "codex-repair-sshd.cmd");
         var legacyStartupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
 
         Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
         Directory.CreateDirectory(Path.GetDirectoryName(launcherPath)!);
 
-        File.WriteAllText(scriptPath, BuildStartupConsoleScript(codexRoot, listenAddress), Encoding.ASCII);
+        File.WriteAllText(repairScriptPath, BuildStartupConsoleRepairScript(codexRoot, listenAddress), Encoding.ASCII);
+        File.WriteAllText(scriptPath, BuildStartupConsoleScript(codexRoot, listenAddress, repairScriptPath), Encoding.ASCII);
         File.WriteAllText(launcherPath, BuildStartupConsoleLauncher(StartupConsoleTaskName), Encoding.ASCII);
         TryDeleteFile(legacyStartupPath);
         await EnsureStartupConsoleTaskAsync(targetUser, scriptPath, StartupConsoleTaskName);
         await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", StartupConsoleTaskName });
 
-        return new StartupConsolePaths(scriptPath, launcherPath, StartupConsoleTaskName);
+        return new StartupConsolePaths(scriptPath, launcherPath, repairScriptPath, StartupConsoleTaskName);
     }
 
     private static void EnsureAuthorizedKeys(string targetUser, string authorizedKey)
@@ -347,10 +351,9 @@ internal static class Bootstrapper
             "Startup");
     }
 
-    private static string BuildStartupConsoleScript(string codexRoot, string listenAddress)
+    private static string BuildStartupConsoleScript(string codexRoot, string listenAddress, string repairScriptPath)
     {
-        var nativeExePath = ToWindowsCmdPath(Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe"));
-        var repairLogPath = ToWindowsCmdPath(Path.Combine(codexRoot, "logs", "sshd-repair.log"));
+        var repairCmdPath = ToWindowsCmdPath(repairScriptPath);
         var rootPath = ToWindowsCmdPath(codexRoot);
         var lines = new[]
         {
@@ -362,15 +365,12 @@ internal static class Bootstrapper
             $"echo Listen: {listenAddress}:22",
             $"echo Root: {rootPath}",
             "echo.",
-            "set \"CODEX_SSHD_ATTEMPTS=6\"",
-            "set \"CODEX_REPAIR_ATTEMPTED=0\"",
-            $"set \"CODEX_NATIVE_EXE={nativeExePath}\"",
-            $"set \"CODEX_SSH_REPAIR_LOG={repairLogPath}\"",
+            $"set \"CODEX_SSH_REPAIR_CMD={repairCmdPath}\"",
             "if exist \"%SystemRoot%\\System32\\OpenSSH\\sshd.exe\" (",
             "  \"%SystemRoot%\\System32\\OpenSSH\\sshd.exe\" -t >nul 2>nul",
             "  if errorlevel 1 (",
             "    echo sshd validation failed, attempting automatic repair...",
-            "    call :repair_sshd",
+            "    call \"%CODEX_SSH_REPAIR_CMD%\"",
             "  )",
             ")",
             "echo.",
@@ -385,20 +385,18 @@ internal static class Bootstrapper
             ")",
             "sc.exe query sshd >nul 2>nul",
             "if not errorlevel 1 (",
-            "  for /l %%A in (1,1,%CODEX_SSHD_ATTEMPTS%) do (",
-            "    sc.exe query sshd | find \"RUNNING\" >nul",
-            "    if not errorlevel 1 goto :sshd_started",
-            "    echo Starting sshd (attempt %%A/%CODEX_SSHD_ATTEMPTS%)...",
+            "  sc.exe query sshd | find \"RUNNING\" >nul",
+            "  if errorlevel 1 (",
+            "    echo Starting sshd...",
             "    sc.exe start sshd >nul 2>nul",
             "    ping -n 4 127.0.0.1 >nul",
+            "    sc.exe query sshd | find \"RUNNING\" >nul",
+            "    if errorlevel 1 (",
+            "      echo sshd is still not running, attempting automatic repair...",
+            "      call \"%CODEX_SSH_REPAIR_CMD%\"",
+            "    )",
             "  )",
             ")",
-            "sc.exe query sshd | find \"RUNNING\" >nul",
-            "if errorlevel 1 (",
-            "  echo sshd is still not running, attempting automatic repair...",
-            "  call :repair_sshd",
-            ")",
-            ":sshd_started",
             "echo.",
             "echo Service status:",
             "for %%S in (Tailscale sshd) do (",
@@ -414,16 +412,27 @@ internal static class Bootstrapper
             "echo.",
             "echo This window stays open for local recovery commands.",
             "prompt CodexRemote $P$G",
-            "goto :eof",
-            string.Empty,
-            ":repair_sshd",
-            "if \"%CODEX_REPAIR_ATTEMPTED%\"==\"1\" goto :eof",
-            "set \"CODEX_REPAIR_ATTEMPTED=1\"",
+            string.Empty
+        };
+
+        return string.Join("\r\n", lines);
+    }
+
+    private static string BuildStartupConsoleRepairScript(string codexRoot, string listenAddress)
+    {
+        var nativeExePath = ToWindowsCmdPath(Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe"));
+        var repairLogPath = ToWindowsCmdPath(Path.Combine(codexRoot, "logs", "sshd-repair.log"));
+        var lines = new[]
+        {
+            "@echo off",
+            $"set \"CODEX_NATIVE_EXE={nativeExePath}\"",
+            $"set \"CODEX_SSH_REPAIR_LOG={repairLogPath}\"",
             "if not exist \"%CODEX_NATIVE_EXE%\" (",
             "  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.",
-            "  goto :eof",
+            "  exit /b 1",
             ")",
             "\"%CODEX_NATIVE_EXE%\" repair-sshd --expected-listen-address " + listenAddress + " --log-path \"%CODEX_SSH_REPAIR_LOG%\"",
+            "exit /b %ERRORLEVEL%",
             string.Empty
         };
 
@@ -674,4 +683,4 @@ internal static class Bootstrapper
     }
 }
 
-internal sealed record StartupConsolePaths(string ScriptPath, string LauncherPath, string TaskName);
+internal sealed record StartupConsolePaths(string ScriptPath, string LauncherPath, string RepairScriptPath, string TaskName);

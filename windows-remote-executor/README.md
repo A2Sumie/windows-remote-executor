@@ -64,7 +64,7 @@ Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the cho
 
 The recovery console is now launched by a highest-privilege `ONLOGON` scheduled task for the target user instead of a Startup-folder `RunAs` prompt. That removes the manual UAC click at sign-in while still giving the signed-in user a visible local console. A helper launcher remains in `C:\CodexRemote\tools\CodexRemote Console.cmd` and simply triggers the scheduled task on demand.
 
-At logon the recovery console validates `sshd.exe -t`, retries service startup, and invokes `WindowsRemoteExecutor.Native.exe repair-sshd` automatically if the config is invalid or `sshd` still does not come up.
+At logon the recovery console validates `sshd.exe -t`, retries service startup, and invokes `WindowsRemoteExecutor.Native.exe repair-sshd` automatically if the config is invalid or `sshd` still does not come up. The repair call is emitted through a separate helper script at `C:\CodexRemote\tools\codex-repair-sshd.cmd` so the startup batch stays simple and avoids `cmd.exe` parser edge cases.
 
 ## Define a Target
 

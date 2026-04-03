@@ -315,6 +315,7 @@ function Ensure-StartupConsole {
 
     $toolsScriptPath = Join-Path (Join-Path $Root 'tools') 'codex-startup-console.cmd'
     $launcherPath = Join-Path (Join-Path $Root 'tools') 'CodexRemote Console.cmd'
+    $repairScriptPath = Join-Path (Join-Path $Root 'tools') 'codex-repair-sshd.cmd'
     $startupDir = Join-Path (Resolve-UserProfilePath -UserName $UserName) 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
     $legacyStartupPath = Join-Path $startupDir 'CodexRemote Console.cmd'
     $taskName = 'CodexRemote Console'
@@ -323,6 +324,20 @@ function Ensure-StartupConsole {
 
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $toolsScriptPath) | Out-Null
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $launcherPath) | Out-Null
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $repairScriptPath) | Out-Null
+
+    $repairContent = @(
+        '@echo off',
+        "set ""CODEX_NATIVE_EXE=$nativeExePath""",
+        "set ""CODEX_SSH_REPAIR_LOG=$repairLogPath""",
+        'if not exist "%CODEX_NATIVE_EXE%" (',
+        '  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.',
+        '  exit /b 1',
+        ')',
+        """%CODEX_NATIVE_EXE%"" repair-sshd --expected-listen-address $ListenAddress --log-path ""%CODEX_SSH_REPAIR_LOG%""",
+        'exit /b %ERRORLEVEL%',
+        ''
+    ) -join "`r`n"
 
     $scriptContent = @(
         '@echo off',
@@ -333,15 +348,12 @@ function Ensure-StartupConsole {
         "echo Listen: $ListenAddress`:22",
         "echo Root: $Root",
         'echo.',
-        'set "CODEX_SSHD_ATTEMPTS=6"',
-        'set "CODEX_REPAIR_ATTEMPTED=0"',
-        "set ""CODEX_NATIVE_EXE=$nativeExePath""",
-        "set ""CODEX_SSH_REPAIR_LOG=$repairLogPath""",
+        "set ""CODEX_SSH_REPAIR_CMD=$repairScriptPath""",
         'if exist "%SystemRoot%\System32\OpenSSH\sshd.exe" (',
         '  "%SystemRoot%\System32\OpenSSH\sshd.exe" -t >nul 2>nul',
         '  if errorlevel 1 (',
         '    echo sshd validation failed, attempting automatic repair...',
-        '    call :repair_sshd',
+        '    call "%CODEX_SSH_REPAIR_CMD%"',
         '  )',
         ')',
         'echo.',
@@ -356,20 +368,18 @@ function Ensure-StartupConsole {
         ')',
         'sc.exe query sshd >nul 2>nul',
         'if not errorlevel 1 (',
-        '  for /l %%A in (1,1,%CODEX_SSHD_ATTEMPTS%) do (',
-        '    sc.exe query sshd | find "RUNNING" >nul',
-        '    if not errorlevel 1 goto :sshd_started',
-        '    echo Starting sshd (attempt %%A/%CODEX_SSHD_ATTEMPTS%)...',
+        '  sc.exe query sshd | find "RUNNING" >nul',
+        '  if errorlevel 1 (',
+        '    echo Starting sshd...',
         '    sc.exe start sshd >nul 2>nul',
         '    ping -n 4 127.0.0.1 >nul',
+        '    sc.exe query sshd | find "RUNNING" >nul',
+        '    if errorlevel 1 (',
+        '      echo sshd is still not running, attempting automatic repair...',
+        '      call "%CODEX_SSH_REPAIR_CMD%"',
+        '    )',
         '  )',
         ')',
-        'sc.exe query sshd | find "RUNNING" >nul',
-        'if errorlevel 1 (',
-        '  echo sshd is still not running, attempting automatic repair...',
-        '  call :repair_sshd',
-        ')',
-        ':sshd_started',
         'echo.',
         'echo Service status:',
         'for %%S in (Tailscale sshd) do (',
@@ -385,16 +395,6 @@ function Ensure-StartupConsole {
         'echo.',
         'echo This window stays open for local recovery commands.',
         'prompt CodexRemote $P$G',
-        'goto :eof',
-        '',
-        ':repair_sshd',
-        'if "%CODEX_REPAIR_ATTEMPTED%"=="1" goto :eof',
-        'set "CODEX_REPAIR_ATTEMPTED=1"',
-        'if not exist "%CODEX_NATIVE_EXE%" (',
-        '  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.',
-        '  goto :eof',
-        ')',
-        """%CODEX_NATIVE_EXE%"" repair-sshd --expected-listen-address $ListenAddress --log-path ""%CODEX_SSH_REPAIR_LOG%""",
         ''
     ) -join "`r`n"
 
@@ -408,6 +408,7 @@ function Ensure-StartupConsole {
         ''
     ) -join "`r`n"
 
+    Set-Content -LiteralPath $repairScriptPath -Value $repairContent -Encoding ascii
     Set-Content -LiteralPath $toolsScriptPath -Value $scriptContent -Encoding ascii
     Set-Content -LiteralPath $launcherPath -Value $launcherContent -Encoding ascii
     if (Test-Path -LiteralPath $legacyStartupPath) {
@@ -418,6 +419,7 @@ function Ensure-StartupConsole {
     return [ordered]@{
         script_path = $toolsScriptPath
         launcher_path = $launcherPath
+        repair_script_path = $repairScriptPath
         task_name = $taskName
     }
 }

@@ -113,4 +113,5 @@ If you need to revert a host that was already switched to a PowerShell login she
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.
 - The recovery console self-checks `sshd.exe -t` at logon and invokes `repair-sshd` automatically if validation fails or the service will not come up.
+- The generated startup console now delegates repair through a separate `codex-repair-sshd.cmd` helper so recovery stays predictable under `cmd.exe` batch parsing.
 - Everything search still depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.
