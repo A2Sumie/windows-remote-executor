@@ -296,150 +296,117 @@ function Ensure-CodexLayout {
     }
 }
 
-function Ensure-StartupConsoleTask {
+function Quote-TaskCommandArgument {
+    param([string]$Value)
+
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    if ($Value -match '[\s"]') {
+        return ('"{0}"' -f ($Value.Replace('"', '\"')))
+    }
+
+    return $Value
+}
+
+function New-TaskCommand {
+    param(
+        [string]$ExecutablePath,
+        [string[]]$ArgumentList
+    )
+
+    $parts = @((Quote-TaskCommandArgument -Value $ExecutablePath))
+    foreach ($arg in $ArgumentList) {
+        $parts += (Quote-TaskCommandArgument -Value $arg)
+    }
+
+    return ($parts -join ' ')
+}
+
+function Get-SshRepairTaskCommand {
+    param(
+        [string]$Root,
+        [string]$ListenAddress
+    )
+
+    $nativeExePath = Join-Path (Join-Path $Root 'tools') 'WindowsRemoteExecutor.Native.exe'
+    $repairLogPath = Join-Path (Join-Path $Root 'logs') 'sshd-repair.log'
+    return (New-TaskCommand -ExecutablePath $nativeExePath -ArgumentList @(
+            'repair-sshd',
+            '--expected-listen-address', $ListenAddress,
+            '--codex-root', $Root,
+            '--log-path', $repairLogPath
+        ))
+}
+
+function Ensure-SessionRepairTask {
     param(
         [string]$TaskName,
         [string]$UserName,
-        [string]$ScriptPath
+        [string]$TaskCommand
     )
 
-    $cmdPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
-    $taskCommand = ('"{0}" /k "{1}"' -f $cmdPath, $ScriptPath)
-
     & schtasks.exe /Delete /TN $TaskName /F *> $null
-    & schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $UserName /RL HIGHEST /IT /TR $taskCommand /F | Out-Null
+    & schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $UserName /RL HIGHEST /TR $TaskCommand /F | Out-Null
     & schtasks.exe /Run /TN $TaskName *> $null
 }
 
 function Ensure-SshRepairTasks {
-    param([string]$RepairScriptPath)
-
-    $cmdPath = Join-Path $env:SystemRoot 'System32\cmd.exe'
-    $taskCommand = ('"{0}" /c "{1}"' -f $cmdPath, $RepairScriptPath)
+    param([string]$TaskCommand)
 
     & schtasks.exe /Delete /TN 'CodexRemote Sshd Repair Startup' /F *> $null
     & schtasks.exe /Delete /TN 'CodexRemote Sshd Repair Watch' /F *> $null
-    & schtasks.exe /Create /TN 'CodexRemote Sshd Repair Startup' /SC ONSTART /RU SYSTEM /TR $taskCommand /F | Out-Null
-    & schtasks.exe /Create /TN 'CodexRemote Sshd Repair Watch' /SC MINUTE /MO 5 /RU SYSTEM /TR $taskCommand /F | Out-Null
+    & schtasks.exe /Create /TN 'CodexRemote Sshd Repair Startup' /SC ONSTART /RU SYSTEM /TR $TaskCommand /F | Out-Null
+    & schtasks.exe /Create /TN 'CodexRemote Sshd Repair Watch' /SC MINUTE /MO 5 /RU SYSTEM /TR $TaskCommand /F | Out-Null
     & schtasks.exe /Run /TN 'CodexRemote Sshd Repair Watch' *> $null
 }
 
-function Ensure-StartupConsole {
+function Remove-LegacyStartupConsoleArtifacts {
+    param(
+        [string]$Root,
+        [string]$UserName
+    )
+
+    $startupDir = Join-Path (Resolve-UserProfilePath -UserName $UserName) 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
+    $legacyStartupPath = Join-Path $startupDir 'CodexRemote Console.cmd'
+
+    foreach ($path in @(
+            (Join-Path (Join-Path $Root 'tools') 'codex-startup-console.cmd'),
+            (Join-Path (Join-Path $Root 'tools') 'CodexRemote Console.cmd'),
+            (Join-Path (Join-Path $Root 'tools') 'codex-repair-sshd.cmd'),
+            $legacyStartupPath
+        )) {
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    & schtasks.exe /Delete /TN 'CodexRemote Console' /F *> $null
+}
+
+function Ensure-StartupRepair {
     param(
         [string]$Root,
         [string]$ListenAddress,
         [string]$UserName
     )
 
-    $toolsScriptPath = Join-Path (Join-Path $Root 'tools') 'codex-startup-console.cmd'
-    $launcherPath = Join-Path (Join-Path $Root 'tools') 'CodexRemote Console.cmd'
-    $repairScriptPath = Join-Path (Join-Path $Root 'tools') 'codex-repair-sshd.cmd'
-    $startupDir = Join-Path (Resolve-UserProfilePath -UserName $UserName) 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
-    $legacyStartupPath = Join-Path $startupDir 'CodexRemote Console.cmd'
-    $taskName = 'CodexRemote Console'
+    $taskName = 'CodexRemote Sshd Repair Logon'
     $nativeExePath = Join-Path (Join-Path $Root 'tools') 'WindowsRemoteExecutor.Native.exe'
     $repairLogPath = Join-Path (Join-Path $Root 'logs') 'sshd-repair.log'
+    $taskCommand = Get-SshRepairTaskCommand -Root $Root -ListenAddress $ListenAddress
 
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $toolsScriptPath) | Out-Null
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $launcherPath) | Out-Null
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $repairScriptPath) | Out-Null
-
-    $repairContent = @(
-        '@echo off',
-        "set ""CODEX_NATIVE_EXE=$nativeExePath""",
-        "set ""CODEX_SSH_REPAIR_LOG=$repairLogPath""",
-        'if not exist "%CODEX_NATIVE_EXE%" (',
-        '  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.',
-        '  exit /b 1',
-        ')',
-        """%CODEX_NATIVE_EXE%"" repair-sshd --expected-listen-address $ListenAddress --log-path ""%CODEX_SSH_REPAIR_LOG%""",
-        'exit /b %ERRORLEVEL%',
-        ''
-    ) -join "`r`n"
-
-    $scriptContent = @(
-        '@echo off',
-        'title CodexRemote Console',
-        'echo [%DATE% %TIME%] CodexRemote startup console',
-        'echo Host: %COMPUTERNAME%',
-        "for /f ""delims="" %%I in ('whoami') do echo User: %%I",
-        "echo Listen: $ListenAddress`:22",
-        "echo Root: $Root",
-        'echo.',
-        "set ""CODEX_SSH_REPAIR_CMD=$repairScriptPath""",
-        'if exist "%SystemRoot%\System32\OpenSSH\sshd.exe" (',
-        '  "%SystemRoot%\System32\OpenSSH\sshd.exe" -t >nul 2>nul',
-        '  if errorlevel 1 (',
-        '    echo sshd validation failed, attempting automatic repair...',
-        '    call "%CODEX_SSH_REPAIR_CMD%"',
-        '  )',
-        ')',
-        'echo.',
-        'sc.exe query Tailscale >nul 2>nul',
-        'if not errorlevel 1 (',
-        '  sc.exe query Tailscale | find "RUNNING" >nul',
-        '  if errorlevel 1 (',
-        '    echo Starting Tailscale...',
-        '    sc.exe start Tailscale >nul 2>nul',
-        '    ping -n 4 127.0.0.1 >nul',
-        '  )',
-        ')',
-        'sc.exe query sshd >nul 2>nul',
-        'if not errorlevel 1 (',
-        '  sc.exe query sshd | find "RUNNING" >nul',
-        '  if errorlevel 1 (',
-        '    echo Starting sshd...',
-        '    sc.exe start sshd >nul 2>nul',
-        '    ping -n 4 127.0.0.1 >nul',
-        '    sc.exe query sshd | find "RUNNING" >nul',
-        '    if errorlevel 1 (',
-        '      echo sshd is still not running, attempting automatic repair...',
-        '      call "%CODEX_SSH_REPAIR_CMD%"',
-        '    )',
-        '  )',
-        ')',
-        'echo.',
-        'echo Service status:',
-        'for %%S in (Tailscale sshd) do (',
-        '  sc.exe query %%S >nul 2>nul',
-        '  if not errorlevel 1 (',
-        '    echo ---',
-        '    sc.exe query %%S',
-        '  )',
-        ')',
-        'echo.',
-        'echo Listener check:',
-        "netstat -ano | findstr /R /C:""$ListenAddress`:22 .*LISTENING""",
-        'echo.',
-        'echo This window stays open for local recovery commands.',
-        'prompt CodexRemote $P$G',
-        ''
-    ) -join "`r`n"
-
-    $launcherContent = @(
-        '@echo off',
-        "schtasks.exe /Run /TN ""$taskName"" >nul 2>nul",
-        'if errorlevel 1 (',
-        "  echo Scheduled task ""$taskName"" was not found or could not be started.",
-        '  exit /b 1',
-        ')',
-        ''
-    ) -join "`r`n"
-
-    Set-Content -LiteralPath $repairScriptPath -Value $repairContent -Encoding ascii
-    Set-Content -LiteralPath $toolsScriptPath -Value $scriptContent -Encoding ascii
-    Set-Content -LiteralPath $launcherPath -Value $launcherContent -Encoding ascii
-    if (Test-Path -LiteralPath $legacyStartupPath) {
-        Remove-Item -LiteralPath $legacyStartupPath -Force -ErrorAction SilentlyContinue
-    }
-    Ensure-StartupConsoleTask -TaskName $taskName -UserName $UserName -ScriptPath $toolsScriptPath
-    Ensure-SshRepairTasks -RepairScriptPath $repairScriptPath
+    Remove-LegacyStartupConsoleArtifacts -Root $Root -UserName $UserName
+    Ensure-SessionRepairTask -TaskName $taskName -UserName $UserName -TaskCommand $taskCommand
+    Ensure-SshRepairTasks -TaskCommand $taskCommand
 
     return [ordered]@{
-        script_path = $toolsScriptPath
-        launcher_path = $launcherPath
-        repair_script_path = $repairScriptPath
-        task_name = $taskName
+        native_tool_path = $nativeExePath
+        repair_log_path = $repairLogPath
+        logon_repair_task_name = $taskName
+        startup_repair_task_name = 'CodexRemote Sshd Repair Startup'
+        watch_repair_task_name = 'CodexRemote Sshd Repair Watch'
     }
 }
 
@@ -473,8 +440,8 @@ Set-SshListenAddress -Address $ListenAddress
 Ensure-ScopedFirewallRule -Address $ListenAddress
 Write-Step 'Preparing CodexRemote directories'
 Ensure-CodexLayout -Root $CodexRoot
-Write-Step 'Installing startup console'
-$startupConsole = Ensure-StartupConsole -Root $CodexRoot -ListenAddress $ListenAddress -UserName $TargetUser
+Write-Step 'Installing headless sshd self-heal tasks'
+$startupRepair = Ensure-StartupRepair -Root $CodexRoot -ListenAddress $ListenAddress -UserName $TargetUser
 Write-Step 'Installing authorized keys'
 Ensure-AuthorizedKeys -KeyText (Read-AuthorizedKey)
 
@@ -504,7 +471,7 @@ $summary = [ordered]@{
     listen_address = $ListenAddress
     tailscale = (Get-Service Tailscale -ErrorAction SilentlyContinue | Select-Object Name, Status, StartType)
     default_shell = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -ErrorAction SilentlyContinue).DefaultShell
-    startup_console = $startupConsole
+    startup_repair = $startupRepair
 }
 
 $summary | ConvertTo-Json -Depth 4

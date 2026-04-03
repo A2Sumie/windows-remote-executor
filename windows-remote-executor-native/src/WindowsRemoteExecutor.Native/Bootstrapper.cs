@@ -99,10 +99,12 @@ internal sealed class BootstrapResult
     public ProbeServiceState? Sshd { get; init; }
     public ProbeServiceState? Tailscale { get; init; }
     public string? DefaultShell { get; init; }
-    public string StartupConsoleScript { get; init; } = string.Empty;
-    public string StartupConsoleLauncher { get; init; } = string.Empty;
-    public string StartupConsoleRepairScript { get; init; } = string.Empty;
-    public string StartupConsoleTaskName { get; init; } = string.Empty;
+    public string NativeToolPath { get; init; } = string.Empty;
+    public string RepairLogPath { get; init; } = string.Empty;
+    public string LogonRepairTaskName { get; init; } = string.Empty;
+    public string StartupRepairTaskName { get; init; } = string.Empty;
+    public string WatchRepairTaskName { get; init; } = string.Empty;
+    public bool RemovedLegacyCmdArtifacts { get; init; }
     public string SshConfigPath { get; init; } = @"C:\ProgramData\ssh\sshd_config";
 }
 
@@ -110,9 +112,10 @@ internal static class Bootstrapper
 {
     private const string OpenSshCapability = "OpenSSH.Server~~~~0.0.1.0";
     private const string OpenSshFirewallRule = "Codex OpenSSH Server (Tailscale)";
-    private const string StartupConsoleTaskName = "CodexRemote Console";
+    private const string LogonRepairTaskName = "CodexRemote Sshd Repair Logon";
     private const string RepairStartupTaskName = "CodexRemote Sshd Repair Startup";
     private const string RepairWatchTaskName = "CodexRemote Sshd Repair Watch";
+    private const string LegacyStartupConsoleTaskName = "CodexRemote Console";
     private static readonly string OpenSshConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ssh",
@@ -138,11 +141,8 @@ internal static class Bootstrapper
         WriteStep("Preparing CodexRemote directories");
         EnsureCodexLayout(options.CodexRoot);
 
-        WriteStep("Installing startup console");
-        var startupConsole = await EnsureStartupConsoleAsync(options.CodexRoot, normalizedTargetUser, options.ListenAddress);
-
-        WriteStep("Installing sshd repair watch");
-        await EnsureSshRepairTasksAsync(startupConsole.RepairScriptPath);
+        WriteStep("Installing headless sshd self-heal tasks");
+        var startupRepair = await EnsureStartupRepairAsync(options.CodexRoot, normalizedTargetUser, options.ListenAddress);
 
         WriteStep("Installing authorized keys");
         EnsureAuthorizedKeys(normalizedTargetUser, key);
@@ -184,10 +184,12 @@ internal static class Bootstrapper
             Sshd = probe.Ssh.Services.TryGetValue("sshd", out var sshd) ? sshd : null,
             Tailscale = probe.Ssh.Services.TryGetValue("Tailscale", out var tailscale) ? tailscale : null,
             DefaultShell = ReadDefaultShell(),
-            StartupConsoleScript = startupConsole.ScriptPath,
-            StartupConsoleLauncher = startupConsole.LauncherPath,
-            StartupConsoleRepairScript = startupConsole.RepairScriptPath,
-            StartupConsoleTaskName = startupConsole.TaskName,
+            NativeToolPath = startupRepair.NativeToolPath,
+            RepairLogPath = startupRepair.RepairLogPath,
+            LogonRepairTaskName = startupRepair.LogonRepairTaskName,
+            StartupRepairTaskName = startupRepair.StartupRepairTaskName,
+            WatchRepairTaskName = startupRepair.WatchRepairTaskName,
+            RemovedLegacyCmdArtifacts = startupRepair.RemovedLegacyCmdArtifacts,
         };
     }
 
@@ -289,24 +291,24 @@ internal static class Bootstrapper
         Directory.CreateDirectory(Path.Combine(codexRoot, "logs"));
     }
 
-    private static async Task<StartupConsolePaths> EnsureStartupConsoleAsync(string codexRoot, string targetUser, string listenAddress)
+    private static async Task<StartupRepairPaths> EnsureStartupRepairAsync(string codexRoot, string targetUser, string listenAddress)
     {
-        var scriptPath = Path.Combine(codexRoot, "tools", "codex-startup-console.cmd");
-        var launcherPath = Path.Combine(codexRoot, "tools", "CodexRemote Console.cmd");
-        var repairScriptPath = Path.Combine(codexRoot, "tools", "codex-repair-sshd.cmd");
-        var legacyStartupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
+        var nativeToolPath = Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe");
+        var repairLogPath = Path.Combine(codexRoot, "logs", "sshd-repair.log");
+        var removedLegacyCmdArtifacts = await RemoveLegacyCmdArtifactsAsync(codexRoot, targetUser);
+        var command = BuildSshRepairTaskCommand(codexRoot, listenAddress);
 
-        Directory.CreateDirectory(Path.GetDirectoryName(scriptPath)!);
-        Directory.CreateDirectory(Path.GetDirectoryName(launcherPath)!);
+        await EnsureLogonRepairTaskAsync(targetUser, command, LogonRepairTaskName);
+        await EnsureSshRepairTasksAsync(command);
+        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", LogonRepairTaskName });
 
-        File.WriteAllText(repairScriptPath, BuildStartupConsoleRepairScript(codexRoot, listenAddress), Encoding.ASCII);
-        File.WriteAllText(scriptPath, BuildStartupConsoleScript(codexRoot, listenAddress, repairScriptPath), Encoding.ASCII);
-        File.WriteAllText(launcherPath, BuildStartupConsoleLauncher(StartupConsoleTaskName), Encoding.ASCII);
-        TryDeleteFile(legacyStartupPath);
-        await EnsureStartupConsoleTaskAsync(targetUser, scriptPath, StartupConsoleTaskName);
-        await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", StartupConsoleTaskName });
-
-        return new StartupConsolePaths(scriptPath, launcherPath, repairScriptPath, StartupConsoleTaskName);
+        return new StartupRepairPaths(
+            nativeToolPath,
+            repairLogPath,
+            LogonRepairTaskName,
+            RepairStartupTaskName,
+            RepairWatchTaskName,
+            removedLegacyCmdArtifacts);
     }
 
     private static void EnsureAuthorizedKeys(string targetUser, string authorizedKey)
@@ -356,97 +358,32 @@ internal static class Bootstrapper
             "Startup");
     }
 
-    private static string BuildStartupConsoleScript(string codexRoot, string listenAddress, string repairScriptPath)
+    private static async Task<bool> RemoveLegacyCmdArtifactsAsync(string codexRoot, string targetUser)
     {
-        var repairCmdPath = ToWindowsCmdPath(repairScriptPath);
-        var rootPath = ToWindowsCmdPath(codexRoot);
-        var lines = new[]
+        var removed = false;
+        var legacyStartupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
+        var legacyFiles = new[]
         {
-            "@echo off",
-            "title CodexRemote Console",
-            "echo [%DATE% %TIME%] CodexRemote startup console",
-            "echo Host: %COMPUTERNAME%",
-            "for /f \"delims=\" %%I in ('whoami') do echo User: %%I",
-            $"echo Listen: {listenAddress}:22",
-            $"echo Root: {rootPath}",
-            "echo.",
-            $"set \"CODEX_SSH_REPAIR_CMD={repairCmdPath}\"",
-            "if exist \"%SystemRoot%\\System32\\OpenSSH\\sshd.exe\" (",
-            "  \"%SystemRoot%\\System32\\OpenSSH\\sshd.exe\" -t >nul 2>nul",
-            "  if errorlevel 1 (",
-            "    echo sshd validation failed, attempting automatic repair...",
-            "    call \"%CODEX_SSH_REPAIR_CMD%\"",
-            "  )",
-            ")",
-            "echo.",
-            "sc.exe query Tailscale >nul 2>nul",
-            "if not errorlevel 1 (",
-            "  sc.exe query Tailscale | find \"RUNNING\" >nul",
-            "  if errorlevel 1 (",
-            "    echo Starting Tailscale...",
-            "    sc.exe start Tailscale >nul 2>nul",
-            "    ping -n 4 127.0.0.1 >nul",
-            "  )",
-            ")",
-            "sc.exe query sshd >nul 2>nul",
-            "if not errorlevel 1 (",
-            "  sc.exe query sshd | find \"RUNNING\" >nul",
-            "  if errorlevel 1 (",
-            "    echo Starting sshd...",
-            "    sc.exe start sshd >nul 2>nul",
-            "    ping -n 4 127.0.0.1 >nul",
-            "    sc.exe query sshd | find \"RUNNING\" >nul",
-            "    if errorlevel 1 (",
-            "      echo sshd is still not running, attempting automatic repair...",
-            "      call \"%CODEX_SSH_REPAIR_CMD%\"",
-            "    )",
-            "  )",
-            ")",
-            "echo.",
-            "echo Service status:",
-            "for %%S in (Tailscale sshd) do (",
-            "  sc.exe query %%S >nul 2>nul",
-            "  if not errorlevel 1 (",
-                "    echo ---",
-            "    sc.exe query %%S",
-            "  )",
-            ")",
-            "echo.",
-            "echo Listener check:",
-            $"netstat -ano | findstr /R /C:\"{listenAddress}:22 .*LISTENING\"",
-            "echo.",
-            "echo This window stays open for local recovery commands.",
-            "prompt CodexRemote $P$G",
-            string.Empty
+            Path.Combine(codexRoot, "tools", "codex-startup-console.cmd"),
+            Path.Combine(codexRoot, "tools", "CodexRemote Console.cmd"),
+            Path.Combine(codexRoot, "tools", "codex-repair-sshd.cmd"),
+            legacyStartupPath
         };
 
-        return string.Join("\r\n", lines);
-    }
-
-    private static string BuildStartupConsoleRepairScript(string codexRoot, string listenAddress)
-    {
-        var nativeExePath = ToWindowsCmdPath(Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe"));
-        var repairLogPath = ToWindowsCmdPath(Path.Combine(codexRoot, "logs", "sshd-repair.log"));
-        var lines = new[]
+        foreach (var file in legacyFiles)
         {
-            "@echo off",
-            $"set \"CODEX_NATIVE_EXE={nativeExePath}\"",
-            $"set \"CODEX_SSH_REPAIR_LOG={repairLogPath}\"",
-            "if not exist \"%CODEX_NATIVE_EXE%\" (",
-            "  echo WARNING: %CODEX_NATIVE_EXE% not found; automatic repair unavailable.",
-            "  exit /b 1",
-            ")",
-            "\"%CODEX_NATIVE_EXE%\" repair-sshd --expected-listen-address " + listenAddress + " --log-path \"%CODEX_SSH_REPAIR_LOG%\"",
-            "exit /b %ERRORLEVEL%",
-            string.Empty
-        };
+            removed |= TryDeleteFile(file);
+        }
 
-        return string.Join("\r\n", lines);
+        var deleteResult = await RunProcessAllowFailureAsync(
+            "schtasks.exe",
+            new[] { "/Delete", "/TN", LegacyStartupConsoleTaskName, "/F" });
+        removed |= deleteResult.ExitCode == 0;
+        return removed;
     }
 
-    private static async Task EnsureStartupConsoleTaskAsync(string targetUser, string scriptPath, string taskName)
+    private static async Task EnsureLogonRepairTaskAsync(string targetUser, string command, string taskName)
     {
-        var command = BuildStartupConsoleTaskCommand(scriptPath);
         await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Delete", "/TN", taskName, "/F" });
         await RunRequiredAsync(
             "schtasks.exe",
@@ -461,19 +398,16 @@ internal static class Bootstrapper
                 targetUser,
                 "/RL",
                 "HIGHEST",
-                "/IT",
                 "/TR",
                 command,
                 "/F"
             });
     }
 
-    private static async Task EnsureSshRepairTasksAsync(string repairScriptPath)
+    private static async Task EnsureSshRepairTasksAsync(string command)
     {
-        var command = BuildNonInteractiveCmdTaskCommand(repairScriptPath);
         await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Delete", "/TN", RepairStartupTaskName, "/F" });
         await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Delete", "/TN", RepairWatchTaskName, "/F" });
-
         await RunRequiredAsync(
             "schtasks.exe",
             new[]
@@ -511,57 +445,59 @@ internal static class Bootstrapper
         await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", RepairWatchTaskName });
     }
 
-    private static string BuildStartupConsoleTaskCommand(string scriptPath)
+    private static string BuildSshRepairTaskCommand(string codexRoot, string listenAddress)
     {
-        var cmdPath = Environment.GetEnvironmentVariable("ComSpec");
-        if (string.IsNullOrWhiteSpace(cmdPath))
+        var nativeToolPath = Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe");
+        var repairLogPath = Path.Combine(codexRoot, "logs", "sshd-repair.log");
+        return BuildTaskCommand(
+            nativeToolPath,
+            "repair-sshd",
+            "--expected-listen-address",
+            listenAddress,
+            "--codex-root",
+            codexRoot,
+            "--log-path",
+            repairLogPath);
+    }
+
+    private static string BuildTaskCommand(string filePath, params string[] arguments)
+    {
+        return string.Join(
+            " ",
+            new[] { QuoteTaskCommandPart(filePath) }.Concat(arguments.Select(QuoteTaskCommandPart)));
+    }
+
+    private static string QuoteTaskCommandPart(string value)
+    {
+        if (string.IsNullOrEmpty(value))
         {
-            cmdPath = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            return "\"\"";
         }
 
-        return $"\"{cmdPath}\" /k \"{scriptPath}\"";
-    }
-
-    private static string BuildNonInteractiveCmdTaskCommand(string scriptPath)
-    {
-        var cmdPath = Environment.GetEnvironmentVariable("ComSpec");
-        if (string.IsNullOrWhiteSpace(cmdPath))
+        if (value.IndexOfAny(new[] { ' ', '\t', '"' }) >= 0)
         {
-            cmdPath = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+            return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
 
-        return $"\"{cmdPath}\" /c \"{scriptPath}\"";
+        return value;
     }
 
-    private static string BuildStartupConsoleLauncher(string taskName)
-    {
-        var lines = new[]
-        {
-            "@echo off",
-            $"schtasks.exe /Run /TN \"{taskName}\" >nul 2>nul",
-            "if errorlevel 1 (",
-            $"  echo Scheduled task \"{taskName}\" was not found or could not be started.",
-            "  exit /b 1",
-            ")",
-            string.Empty
-        };
-
-        return string.Join("\r\n", lines);
-    }
-
-    private static void TryDeleteFile(string path)
+    private static bool TryDeleteFile(string path)
     {
         try
         {
             if (File.Exists(path))
             {
                 File.Delete(path);
+                return true;
             }
         }
         catch
         {
             // Best effort cleanup of the legacy Startup-folder launcher.
         }
+
+        return false;
     }
 
     private static void AppendUniqueLine(string filePath, string value)
@@ -634,24 +570,24 @@ internal static class Bootstrapper
     {
         if (ProbeCollector.TryGetService("Tailscale") is not null)
         {
-            await RunRequiredAsync("cmd.exe", "/c sc.exe config Tailscale start= auto");
-            await RunRequiredAsync("cmd.exe", "/c sc.exe config sshd depend= Tcpip/Tailscale");
+            await RunRequiredAsync("sc.exe", new[] { "config", "Tailscale", "start=", "auto" });
+            await RunRequiredAsync("sc.exe", new[] { "config", "sshd", "depend=", "Tcpip/Tailscale" });
         }
         else
         {
-            await RunRequiredAsync("cmd.exe", "/c sc.exe config sshd depend= Tcpip");
+            await RunRequiredAsync("sc.exe", new[] { "config", "sshd", "depend=", "Tcpip" });
         }
 
-        await RunRequiredAsync("cmd.exe", "/c sc.exe config sshd start= auto");
-        await RunRequiredAsync("cmd.exe", "/c sc.exe failure sshd reset= 86400 actions= restart/5000/restart/15000/restart/30000");
-        await RunProcessAllowFailureAsync("cmd.exe", "/c sc.exe failureflag sshd 1");
+        await RunRequiredAsync("sc.exe", new[] { "config", "sshd", "start=", "auto" });
+        await RunRequiredAsync("sc.exe", new[] { "failure", "sshd", "reset=", "86400", "actions=", "restart/5000/restart/15000/restart/30000" });
+        await RunProcessAllowFailureAsync("sc.exe", new[] { "failureflag", "sshd", "1" });
         await RunRequiredAsync("reg.exe", @"add HKLM\SYSTEM\CurrentControlSet\Services\sshd /v DelayedAutostart /t REG_DWORD /d 0 /f");
     }
 
     private static async Task StartSshdAsync()
     {
-        await RunProcessAllowFailureAsync("cmd.exe", "/c sc.exe stop sshd");
-        await RunProcessAllowFailureAsync("cmd.exe", "/c sc.exe start sshd");
+        await RunProcessAllowFailureAsync("sc.exe", new[] { "stop", "sshd" });
+        await RunProcessAllowFailureAsync("sc.exe", new[] { "start", "sshd" });
 
         for (var attempt = 0; attempt < 30; attempt++)
         {
@@ -717,12 +653,6 @@ internal static class Bootstrapper
         var leaf = targetUser.Split(separators, StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
         return string.IsNullOrWhiteSpace(leaf) ? targetUser : leaf;
     }
-
-    private static string ToWindowsCmdPath(string path)
-    {
-        return path.Replace('/', '\\');
-    }
-
     private static async Task<ProcessResult> RunProcessAllowFailureAsync(string fileName, string arguments)
     {
         return await ProcessRunner.RunAsync(fileName, arguments, throwOnFailure: false);
@@ -744,4 +674,10 @@ internal static class Bootstrapper
     }
 }
 
-internal sealed record StartupConsolePaths(string ScriptPath, string LauncherPath, string RepairScriptPath, string TaskName);
+internal sealed record StartupRepairPaths(
+    string NativeToolPath,
+    string RepairLogPath,
+    string LogonRepairTaskName,
+    string StartupRepairTaskName,
+    string WatchRepairTaskName,
+    bool RemovedLegacyCmdArtifacts);

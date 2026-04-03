@@ -31,6 +31,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
 - Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
 - Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell is specifically required.
+- On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
 - Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's UTF-8/base64 transport.
 
 ## PowerShell Rule

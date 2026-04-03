@@ -13,16 +13,17 @@ Operating rules:
 1. Prefer `win-remote run`, `win-remote capture`, `win-remote py`, `win-remote put`, `win-remote get`, `win-remote deploy`, `win-remote probe`, `win-remote policy`, `win-remote guard`, and `win-remote repair`.
 2. Treat PowerShell as a fallback. If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's UTF-8/base64 transport.
 3. Use `win-remote run` for Windows-native platform tools such as `wsl.exe`, `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
-4. If the result is process output and needs stable parsing, prefer `win-remote capture`, which returns JSON with detected encodings plus raw base64 stdout/stderr bytes.
-5. If the result is Windows state, prefer `win-remote exec --stdin` and emit JSON from Windows-local PowerShell instead of parsing localized CLI output over SSH.
-6. For complex WSL/Linux setup, upload a `.sh` file and invoke it with `wsl.exe ... bash /mnt/c/...` instead of nesting long quoted commands.
-7. Do not invoke the Windows native executor directly unless you have a specific reason. Let `win-remote` handle base64 transport and `--access-token`.
-8. Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
-9. Assume the host should remain `private-only` unless the operator explicitly says otherwise.
-10. Never weaken `access-policy.json`, remove the `sshd` guard, or permit wildcard listeners without explicit operator approval.
-11. Never commit real host env files, access tokens, hostnames, Tailscale IPs, usernames, SSH keys, logs, or publish outputs.
-12. Prefer the framework-dependent `.NET 8` publish when the Windows host already has the `.NET 8` runtime installed.
-13. Use the self-contained publish only when the host cannot satisfy the framework-dependent runtime requirement.
+4. On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
+5. If the result is process output and needs stable parsing, prefer `win-remote capture`, which returns JSON with detected encodings plus raw base64 stdout/stderr bytes.
+6. If the result is Windows state, prefer `win-remote exec --stdin` and emit JSON from Windows-local PowerShell instead of parsing localized CLI output over SSH.
+7. For complex WSL/Linux setup, upload a `.sh` file and invoke it with `wsl.exe ... bash /mnt/c/...` instead of nesting long quoted commands.
+8. Do not invoke the Windows native executor directly unless you have a specific reason. Let `win-remote` handle base64 transport and `--access-token`.
+9. Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
+10. Assume the host should remain `private-only` unless the operator explicitly says otherwise.
+11. Never weaken `access-policy.json`, remove the `sshd` guard, or permit wildcard listeners without explicit operator approval.
+12. Never commit real host env files, access tokens, hostnames, Tailscale IPs, usernames, SSH keys, logs, or publish outputs.
+13. Prefer the framework-dependent `.NET 8` publish when the Windows host already has the `.NET 8` runtime installed.
+14. Use the self-contained publish only when the host cannot satisfy the framework-dependent runtime requirement.
 
 Suggested workflow:
 1. Read `windows-remote-executor/README.md` and `windows-remote-executor-native/README.md`.

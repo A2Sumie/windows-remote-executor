@@ -4,13 +4,12 @@ This toolkit lets a macOS or Linux shell drive a Windows machine over SSH withou
 
 The intended steady state is:
 
-- `cmd.exe`, `scp`, and a native Windows executor for routine work
+- direct native process launch, `scp`, and a native Windows executor for routine work
 - PowerShell only when the task is specifically PowerShell-shaped, and only through the wrapper's UTF-8/base64 path
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
 ## What It Does
 
-- runs remote `cmd.exe` commands
 - runs remote native processes without a shell hop
 - captures remote native process output as JSON with detected encodings and raw base64 stdout/stderr bytes
 - runs remote Python scripts, including `conda run`
@@ -61,11 +60,15 @@ Or use the native bootstrap command directly:
   --listen-address 100.101.102.103
 ```
 
-Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, and installs a visible `cmd.exe` recovery console path for local login sessions.
+Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, removes any legacy `cmd` recovery artifacts, and installs headless `repair-sshd` scheduled tasks that invoke `WindowsRemoteExecutor.Native.exe` directly.
 
-The recovery console is now launched by a highest-privilege `ONLOGON` scheduled task for the target user instead of a Startup-folder `RunAs` prompt. That removes the manual UAC click at sign-in while still giving the signed-in user a visible local console. A helper launcher remains in `C:\CodexRemote\tools\CodexRemote Console.cmd` and simply triggers the scheduled task on demand.
+The logon/startup repair path is now fully headless. There is no Startup-folder batch file, no `cmd.exe` recovery window, and no `RunAs` prompt at sign-in. Three scheduled tasks cover the steady state instead:
 
-At logon the recovery console validates `sshd.exe -t`, retries service startup, and invokes `WindowsRemoteExecutor.Native.exe repair-sshd` automatically if the config is invalid or `sshd` still does not come up. The repair call is emitted through a separate helper script at `C:\CodexRemote\tools\codex-repair-sshd.cmd` so the startup batch stays simple and avoids `cmd.exe` parser edge cases.
+- `CodexRemote Sshd Repair Logon`
+- `CodexRemote Sshd Repair Startup`
+- `CodexRemote Sshd Repair Watch`
+
+Each task runs `WindowsRemoteExecutor.Native.exe repair-sshd` directly, so recovery no longer depends on `cmd.exe` batch parsing.
 
 ## Define a Target
 
@@ -179,6 +182,7 @@ When `access-policy.json` contains an access token hash, native commands such as
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
+- On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
 - Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. Use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.
 - `find` still relies on an externally staged `es.exe`.

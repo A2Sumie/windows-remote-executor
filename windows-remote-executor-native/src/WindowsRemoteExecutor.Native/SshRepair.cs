@@ -352,22 +352,22 @@ internal static class SshRepair
     {
         if (ProbeCollector.TryGetService("Tailscale") is not null)
         {
-            await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe config Tailscale start= auto", throwOnFailure: true);
-            await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe config sshd depend= Tcpip/Tailscale", throwOnFailure: true);
+            await ProcessRunner.RunAsync("sc.exe", new[] { "config", "Tailscale", "start=", "auto" }, throwOnFailure: true);
+            await ProcessRunner.RunAsync("sc.exe", new[] { "config", "sshd", "depend=", "Tcpip/Tailscale" }, throwOnFailure: true);
             actions.Add("set-sshd-dependency-tailscale");
         }
         else
         {
-            await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe config sshd depend= Tcpip", throwOnFailure: true);
+            await ProcessRunner.RunAsync("sc.exe", new[] { "config", "sshd", "depend=", "Tcpip" }, throwOnFailure: true);
             actions.Add("set-sshd-dependency-tcpip");
         }
 
-        await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe config sshd start= auto", throwOnFailure: true);
+        await ProcessRunner.RunAsync("sc.exe", new[] { "config", "sshd", "start=", "auto" }, throwOnFailure: true);
         await ProcessRunner.RunAsync(
-            "cmd.exe",
-            "/c sc.exe failure sshd reset= 86400 actions= restart/5000/restart/15000/restart/30000",
+            "sc.exe",
+            new[] { "failure", "sshd", "reset=", "86400", "actions=", "restart/5000/restart/15000/restart/30000" },
             throwOnFailure: true);
-        await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe failureflag sshd 1", throwOnFailure: false);
+        await ProcessRunner.RunAsync("sc.exe", new[] { "failureflag", "sshd", "1" }, throwOnFailure: false);
         await ProcessRunner.RunAsync(
             "reg.exe",
             @"add HKLM\SYSTEM\CurrentControlSet\Services\sshd /v DelayedAutostart /t REG_DWORD /d 0 /f",
@@ -385,8 +385,8 @@ internal static class SshRepair
 
     private static async Task StartSshdAsync(List<string> actions)
     {
-        await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe stop sshd", throwOnFailure: false);
-        await ProcessRunner.RunAsync("cmd.exe", "/c sc.exe start sshd", throwOnFailure: false);
+        await ProcessRunner.RunAsync("sc.exe", new[] { "stop", "sshd" }, throwOnFailure: false);
+        await ProcessRunner.RunAsync("sc.exe", new[] { "start", "sshd" }, throwOnFailure: false);
 
         for (var attempt = 0; attempt < 30; attempt++)
         {

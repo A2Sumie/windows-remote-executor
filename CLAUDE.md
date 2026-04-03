@@ -16,6 +16,7 @@ Use this repository's executor instead of inventing your own Windows transport.
 - Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, and `update-tools`.
 - Use `run` for `wsl.exe`, `dism.exe`, and other Windows-native platform tools instead of wrapping them in PowerShell.
 - Use `capture` when output may be UTF-16, locale-codepage, or binary-shaped and you need stable JSON plus raw bytes.
+- On `X570`, do not use `win-remote cmd` as part of the normal control path.
 - Treat PowerShell as fallback only.
 - If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's UTF-8/base64 path.
 - Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
