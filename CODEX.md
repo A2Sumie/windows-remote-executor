@@ -3,6 +3,7 @@
 Read `AGENTS.md` first.
 
 Use `windows-remote-executor/bin/win-remote` as the primary interface for Windows work from this repository.
+For routine agent use, prefer the structured MCP server in `windows-remote-executor/mcp/win_remote_mcp.py`.
 
 ## First Commands
 
@@ -19,6 +20,7 @@ Use `windows-remote-executor/bin/win-remote` as the primary interface for Window
 - On `X570`, do not use `win-remote cmd` as part of the normal control path.
 - Treat PowerShell as fallback only.
 - If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's UTF-8/base64 path.
+- `run` and `capture` now reject raw `powershell.exe` / `pwsh` by default.
 - Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
 - If a result needs to be machine-readable, prefer `capture` for process output and `exec --stdin` plus JSON for Windows state.
 - For complex WSL setup, upload a `.sh` file and execute it with `wsl.exe ... bash /mnt/c/...`.

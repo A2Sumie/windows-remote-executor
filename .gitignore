@@ -1,5 +1,6 @@
 .DS_Store
 *.zip
+__pycache__/
 
 windows-remote-executor/targets/*.env
 !windows-remote-executor/targets/example.env

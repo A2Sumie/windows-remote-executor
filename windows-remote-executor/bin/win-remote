@@ -13,8 +13,8 @@ usage() {
 Usage:
   win-remote exec <target> [--file <local-ps1> | --stdin | <powershell-code>]
   win-remote cmd <target> <cmd-code>
-  win-remote run <target> [--cwd <remote-dir>] <program> [args...]
-  win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] <program> [args...]
+  win-remote run <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]
+  win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
   win-remote py <target> <remote-script-path> [--cwd <remote-dir>] [--python <remote-python>] [--conda-env <name> | --conda-prefix <prefix>] [-- <script-args...>]
   win-remote find <target> <query> [--max <count>]
   win-remote probe <target> [--out <local-json-file>]
@@ -241,6 +241,33 @@ read_text_source() {
   esac
 }
 
+is_raw_powershell_program() {
+  local program="${1//\\//}"
+  program="${program##*/}"
+  program="$(printf '%s' "${program}" | tr '[:upper:]' '[:lower:]')"
+
+  case "${program}" in
+    powershell|powershell.exe|pwsh|pwsh.exe)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
+guard_raw_powershell_program() {
+  local subcommand="$1"
+  local allow_flag="$2"
+  local program="$3"
+
+  [[ "${allow_flag}" == "1" ]] && return 0
+  [[ "${WIN_REMOTE_ALLOW_RAW_POWERSHELL:-0}" == "1" ]] && return 0
+
+  if is_raw_powershell_program "${program}"; then
+    die "${subcommand} blocks raw PowerShell transport by default: ${program}. Use 'win-remote exec <target> --file <script.ps1>' or 'win-remote exec <target> --stdin'. If you intentionally need the legacy path, pass --allow-powershell."
+  fi
+}
+
 cmd_quote() {
   local value="${1//\"/\"\"}"
   printf '"%s"' "${value}"
@@ -291,17 +318,22 @@ cmd_cmd() {
 }
 
 cmd_run() {
-  [[ $# -ge 2 ]] || die "run requires <target> [--cwd <remote-dir>] <program> [args...]"
+  [[ $# -ge 2 ]] || die "run requires <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]"
   local target="$1"
   shift
 
   local cwd=""
+  local allow_powershell=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cwd)
         [[ $# -ge 2 ]] || die "--cwd requires a directory"
         cwd="$(normalize_remote_path "$2")"
         shift 2
+        ;;
+      --allow-powershell)
+        allow_powershell=1
+        shift
         ;;
       --)
         shift
@@ -319,6 +351,7 @@ cmd_run() {
 
   local program="$1"
   shift
+  guard_raw_powershell_program "run" "${allow_powershell}" "${program}"
 
   local -a native_tokens=("run-b64" "--file" "$(encode_utf8_b64 "${program}")")
   if [[ -n "${cwd}" ]]; then
@@ -334,12 +367,13 @@ cmd_run() {
 }
 
 cmd_capture() {
-  [[ $# -ge 2 ]] || die "capture requires <target> [--cwd <remote-dir>] [--out <local-json-file>] <program> [args...]"
+  [[ $# -ge 2 ]] || die "capture requires <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]"
   local target="$1"
   shift
 
   local cwd=""
   local out_file=""
+  local allow_powershell=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cwd)
@@ -351,6 +385,10 @@ cmd_capture() {
         [[ $# -ge 2 ]] || die "--out requires a local file path"
         out_file="$2"
         shift 2
+        ;;
+      --allow-powershell)
+        allow_powershell=1
+        shift
         ;;
       --)
         shift
@@ -368,6 +406,7 @@ cmd_capture() {
 
   local program="$1"
   shift
+  guard_raw_powershell_program "capture" "${allow_powershell}" "${program}"
 
   local -a native_tokens=("capture-b64" "--file" "$(encode_utf8_b64 "${program}")")
   if [[ -n "${cwd}" ]]; then

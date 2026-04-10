@@ -2,6 +2,8 @@
 
 This toolkit lets a macOS or Linux shell drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and a PowerShell fallback that does not depend on fragile local quoting.
 
+For agentic clients, the preferred entrypoint is now the structured MCP server in `MCP.md`, not ad hoc shell command generation.
+
 The intended steady state is:
 
 - direct native process launch, `scp`, and a native Windows executor for routine work
@@ -14,6 +16,7 @@ The intended steady state is:
 - captures remote native process output as JSON with detected encodings and raw base64 stdout/stderr bytes
 - runs remote Python scripts, including `conda run`
 - sends PowerShell as UTF-8 base64 and decodes it on Windows before launching PowerShell
+- ships a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
 - uploads and downloads files with `scp`
 - collects a JSON probe from the target host
 - deploys a directory through a remote staging area
@@ -28,6 +31,8 @@ The intended steady state is:
 windows-remote-executor/
 ├── bin/win-remote
 ├── lib/common.sh
+├── mcp/
+│   └── win_remote_mcp.py
 ├── targets/example.env
 └── windows/
     ├── bootstrap-host.ps1
@@ -101,6 +106,12 @@ Probe the remote host:
 ```bash
 ./windows-remote-executor/bin/win-remote probe winbox
 ./windows-remote-executor/bin/win-remote probe winbox --out ./probe-winbox.json
+```
+
+For agent clients, prefer the MCP server so the model calls structured tools instead of authoring shell:
+
+```bash
+python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 ```
 
 Run PowerShell from a local file so the local shell never has to escape it:
@@ -184,6 +195,6 @@ When `access-policy.json` contains an access token hash, native commands such as
 - Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
 - On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
-- Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. Use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.
+- Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.
 - `find` still relies on an externally staged `es.exe`.
 - The PowerShell route is now `local UTF-8 base64 -> WindowsRemoteExecutor.Native.exe powershell-b64 -> Windows-local decode -> PowerShell -EncodedCommand`, which removes one quoting layer from SSH.

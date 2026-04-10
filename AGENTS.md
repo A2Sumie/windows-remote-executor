@@ -7,6 +7,7 @@ If you are an agentic tool operating from this repository, use this file as the 
 Use this repository to operate a Windows host from macOS or Linux through the provided executor.
 
 - Local wrapper: `windows-remote-executor/bin/win-remote`
+- Structured MCP server: `windows-remote-executor/mcp/win_remote_mcp.py`
 - Windows native executor: `windows-remote-executor-native`
 - Default stance: SSH on a private address, access policy enabled, PowerShell minimized
 
@@ -15,6 +16,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 1. Read `windows-remote-executor/README.md`.
 2. Locate the real target env file outside git-tracked defaults.
 3. Start with `./windows-remote-executor/bin/win-remote probe <target>`.
+4. For routine agent use, prefer the MCP server over shell-authored command strings.
 4. If the task touches host exposure or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
 5. Only then perform file transfer, process execution, deploys, or tool updates.
 
@@ -33,6 +35,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell is specifically required.
 - On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
 - Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's UTF-8/base64 transport.
+- `win-remote run` and `win-remote capture` now block raw `powershell.exe` / `pwsh` by default.
 
 ## PowerShell Rule
 
@@ -42,6 +45,7 @@ Treat raw PowerShell command lines as disallowed.
 - If generating PowerShell dynamically, prefer `--stdin`.
 - Do not use inline PowerShell as a normal control path.
 - Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
+- Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
 - If the goal is WSL or Linux setup, upload a `.sh` file and invoke `wsl.exe ... bash /mnt/c/...` via `win-remote run`.
 
@@ -68,7 +72,7 @@ After making changes, verify with at least:
 1. `win-remote probe <target>`
 2. one `win-remote run <target> ...` smoke test
 3. `win-remote guard <target>` if networking or policy changed
-4. one PowerShell path only if your change touched PowerShell behavior
+4. one PowerShell path through `exec --file` or `exec --stdin` only if your change touched PowerShell behavior
 
 ## Git Rule
 

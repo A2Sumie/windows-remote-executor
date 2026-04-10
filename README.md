@@ -7,11 +7,14 @@ Windows Remote Executor is a two-part toolkit for operating Windows hosts from m
 
 The design goal is simple: keep SSH as the transport, keep PowerShell as a reluctant fallback, and prefer a dropped native executable plus file transfer over brittle inline script transport. That reduces local quoting failures, keeps the control plane easier to reason about, and narrows the amount of PowerShell/AMSI-shaped surface used during normal automation.
 
+For agentic clients, the preferred control plane is now the structured MCP server in `windows-remote-executor/MCP.md`, not ad hoc shell command generation.
+
 ## Features
 
 - remote `cmd.exe`, native process, and Python execution
 - structured capture for localized or byte-sensitive process output
 - Windows-local PowerShell decode path for the cases where PowerShell is unavoidable
+- a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
 - JSON host probing
 - staged directory deploys
 - hot updates for the remote tool directory
@@ -43,10 +46,10 @@ The current framework-dependent build targets `.NET 8` on Windows.
 
 This repository also ships agent-facing entrypoints that are meant to be discovered directly by tooling:
 
-- [AGENTS.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/AGENTS.md) for repository-local agent guidance
-- [CLAUDE.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/CLAUDE.md) for Claude Code style entrypoint discovery
-- [CODEX.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/CODEX.md) for Codex style entrypoint discovery
-- [templates/AGENT_INSTRUCTIONS_TEMPLATE.md](/Users/zou/ytdlp/subPrep/livestr/windows-remote-executor-public/templates/AGENT_INSTRUCTIONS_TEMPLATE.md) for copy-paste system-prompt or task-brief usage
+- `AGENTS.md` for repository-local agent guidance
+- `CLAUDE.md` for Claude Code style entrypoint discovery
+- `CODEX.md` for Codex style entrypoint discovery
+- `templates/AGENT_INSTRUCTIONS_TEMPLATE.md` for copy-paste system-prompt or task-brief usage
 
 ## Agent Quick Start
 
@@ -56,7 +59,7 @@ If an agent opens this repository cold, the shortest safe path is:
 2. Read `windows-remote-executor/README.md`.
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
 4. Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, and `update-tools`.
-5. Use `exec --file` only when PowerShell is actually needed.
+5. Prefer the MCP server for routine agent use; use `exec --file` only when PowerShell is actually needed.
 
 ## License
 
