@@ -268,6 +268,10 @@ guard_raw_powershell_program() {
   fi
 }
 
+print_ok() {
+  printf 'OK\n'
+}
+
 cmd_quote() {
   local value="${1//\"/\"\"}"
   printf '"%s"' "${value}"
@@ -795,7 +799,10 @@ cmd_policy() {
 
   if [[ ${run_guard} -eq 1 ]]; then
     cmd_guard "${target}"
+    return
   fi
+
+  print_ok
 }
 
 cmd_put() {
@@ -808,6 +815,7 @@ cmd_put() {
   [[ -e "${local_path}" ]] || die "Local path not found: ${local_path}"
   ensure_remote_parent "${remote_path}"
   scp_to_remote "${local_path}" "${remote_path}"
+  print_ok
 }
 
 cmd_get() {
@@ -819,6 +827,7 @@ cmd_get() {
 
   mkdir -p "$(dirname "${local_path}")"
   scp_from_remote "${remote_path}" "${local_path}"
+  print_ok
 }
 
 cmd_deploy() {
@@ -906,7 +915,10 @@ EOF
 
   if [[ -n "${post_code}" ]]; then
     ssh_exec_powershell "${post_code}"
+    return
   fi
+
+  print_ok
 }
 
 cmd_ps_encode() {
@@ -1096,7 +1108,10 @@ cmd_update_tools() {
     expected="$(resolve_expected_listen_address "")"
     install_guard_tasks "${expected}"
     cmd_guard "${target}"
+    return
   fi
+
+  print_ok
 }
 
 main() {

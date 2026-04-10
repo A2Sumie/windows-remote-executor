@@ -374,6 +374,7 @@ def run_win_remote(argv: list[str], stdin_text: str | None = None) -> CommandRes
 
 def format_result(result: CommandResult, parse_stdout_json: bool = False) -> dict[str, Any]:
     payload = result.to_payload()
+    payload["status"] = "ok" if result.exit_code == 0 else "error"
     if parse_stdout_json:
         stripped = result.stdout.strip()
         if stripped:

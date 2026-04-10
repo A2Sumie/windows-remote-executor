@@ -196,5 +196,6 @@ When `access-policy.json` contains an access token hash, native commands such as
 - On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
 - Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.
+- Silent admin commands such as `put`, `get`, `deploy` without `--post`, `update-tools` without `--install-guard`, and `policy --no-run-guard` now print `OK` on success so agent clients do not misread silence as uncertainty.
 - `find` still relies on an externally staged `es.exe`.
 - The PowerShell route is now `local UTF-8 base64 -> WindowsRemoteExecutor.Native.exe powershell-b64 -> Windows-local decode -> PowerShell -EncodedCommand`, which removes one quoting layer from SSH.
