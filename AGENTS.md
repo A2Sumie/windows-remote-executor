@@ -36,6 +36,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
 - Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's UTF-8/base64 transport.
 - `win-remote run` and `win-remote capture` now block raw `powershell.exe` / `pwsh` by default.
+- Silent admin commands such as `put`, `get`, and no-post `deploy` now return `OK` on success so clients do not treat silence as uncertainty.
 
 ## PowerShell Rule
 
