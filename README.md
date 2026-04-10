@@ -15,9 +15,10 @@ For agentic clients, the preferred control plane is now the structured MCP serve
 - structured capture for localized or byte-sensitive process output
 - Windows-local PowerShell decode path for the cases where PowerShell is unavoidable
 - a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
+- structured scheduled-task inspection so task names with spaces do not need handwritten PowerShell quoting
 - JSON host probing
 - staged directory deploys
-- hot updates for the remote tool directory
+- hot updates for the remote tool directory that switch a stable launcher to a new versioned release
 - private-network policy enforcement
 - optional access-token requirement for native commands
 - automatic `sshd` disablement when listener exposure drifts outside policy
@@ -58,7 +59,7 @@ If an agent opens this repository cold, the shortest safe path is:
 1. Read `AGENTS.md`.
 2. Read `windows-remote-executor/README.md`.
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
-4. Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, and `update-tools`.
+4. Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
 5. Prefer the MCP server for routine agent use; use `exec --file` only when PowerShell is actually needed.
 
 ## License

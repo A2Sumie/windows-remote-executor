@@ -28,15 +28,17 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote py` for Python scripts on the Windows host.
 - Use `win-remote put` and `win-remote get` for file transfer.
 - Use `win-remote deploy` for staged directory updates.
-- Use `win-remote update-tools` to replace the Windows-side executor itself.
+- Use `win-remote update-tools` to publish a new Windows-side executor release without overwriting an in-use `.exe`.
 - Use `win-remote policy` to install or rotate `access-policy.json`.
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
 - Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
+- Use `win-remote tasks` or MCP `win_tasks` when you need scheduled-task state; do not hand-author `Get-ScheduledTaskInfo -TaskName ...` for names with spaces.
 - Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell is specifically required.
 - On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
 - Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's UTF-8/base64 transport.
 - `win-remote run` and `win-remote capture` now block raw `powershell.exe` / `pwsh` by default.
 - Silent admin commands such as `put`, `get`, and no-post `deploy` now return `OK` on success so clients do not treat silence as uncertainty.
+- `win-remote update-tools` now stages versioned releases under `C:\CodexRemote\tools\releases\...` and flips the stable launcher `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`.
 
 ## PowerShell Rule
 

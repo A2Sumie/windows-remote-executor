@@ -23,6 +23,7 @@ The intended steady state is:
 - installs an access policy with an optional access token hash
 - installs an `sshd` guard that disables the service if it listens on an unexpected address
 - installs `sshd` repair watch tasks and service recovery actions
+- exposes structured scheduled-task inspection so task names with spaces stay out of ad hoc PowerShell
 - hot-updates the remote tool directory with backups
 
 ## Directory Layout
@@ -65,7 +66,7 @@ Or use the native bootstrap command directly:
   --listen-address 100.101.102.103
 ```
 
-Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, removes any legacy `cmd` recovery artifacts, and installs headless `repair-sshd` scheduled tasks that invoke `WindowsRemoteExecutor.Native.exe` directly.
+Bootstrap prepares OpenSSH, writes `sshd_config`, scopes the firewall to the chosen local IP, installs authorized keys, creates `C:\CodexRemote\{tools,inbox,staging,apps,logs}`, removes any legacy `cmd` recovery artifacts, and installs headless `repair-sshd` scheduled tasks that invoke the stable `WindowsRemoteExecutor.cmd` launcher.
 
 The logon/startup repair path is now fully headless. There is no Startup-folder batch file, no `cmd.exe` recovery window, and no `RunAs` prompt at sign-in. Three scheduled tasks cover the steady state instead:
 
@@ -73,7 +74,7 @@ The logon/startup repair path is now fully headless. There is no Startup-folder 
 - `CodexRemote Sshd Repair Startup`
 - `CodexRemote Sshd Repair Watch`
 
-Each task runs `WindowsRemoteExecutor.Native.exe repair-sshd` directly, so recovery no longer depends on `cmd.exe` batch parsing.
+Each task runs `WindowsRemoteExecutor.cmd repair-sshd`, so recovery no longer depends on `cmd.exe` batch parsing and future hot updates can switch to a new versioned native payload without stopping older executor processes.
 
 ## Define a Target
 
@@ -170,7 +171,14 @@ Hot-update the remote tool directory:
 ./windows-remote-executor/bin/win-remote update-tools winbox
 ```
 
-`update-tools` uploads the current native executable and companion files into `C:\CodexRemote\tools\`, keeping `.bak-<timestamp>` copies beside replaced files.
+Inspect scheduled tasks without hand-writing PowerShell quoting:
+
+```bash
+./windows-remote-executor/bin/win-remote tasks winbox
+./windows-remote-executor/bin/win-remote tasks winbox --task-name "CodexRemote Sshd Repair Watch"
+```
+
+`update-tools` now uploads the current native payload into `C:\CodexRemote\tools\releases\<timestamp>\`, refreshes `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`, and writes `C:\CodexRemote\tools\current-release.txt`. That lets the control plane flip to a new release even when older `WindowsRemoteExecutor.Native.exe` processes are still running.
 
 ## Security Model
 
@@ -189,8 +197,9 @@ When `access-policy.json` contains an access token hash, native commands such as
 ## Notes
 
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
-- `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` rely on `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe`.
+- `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
+- Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
 - On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.

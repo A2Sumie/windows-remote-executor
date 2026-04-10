@@ -100,6 +100,7 @@ internal sealed class BootstrapResult
     public ProbeServiceState? Tailscale { get; init; }
     public string? DefaultShell { get; init; }
     public string NativeToolPath { get; init; } = string.Empty;
+    public string NativeLauncherPath { get; init; } = string.Empty;
     public string RepairLogPath { get; init; } = string.Empty;
     public string LogonRepairTaskName { get; init; } = string.Empty;
     public string StartupRepairTaskName { get; init; } = string.Empty;
@@ -112,6 +113,8 @@ internal static class Bootstrapper
 {
     private const string OpenSshCapability = "OpenSSH.Server~~~~0.0.1.0";
     private const string OpenSshFirewallRule = "Codex OpenSSH Server (Tailscale)";
+    private const string NativeToolFileName = "WindowsRemoteExecutor.Native.exe";
+    private const string NativeLauncherFileName = "WindowsRemoteExecutor.cmd";
     private const string LogonRepairTaskName = "CodexRemote Sshd Repair Logon";
     private const string RepairStartupTaskName = "CodexRemote Sshd Repair Startup";
     private const string RepairWatchTaskName = "CodexRemote Sshd Repair Watch";
@@ -185,6 +188,7 @@ internal static class Bootstrapper
             Tailscale = probe.Ssh.Services.TryGetValue("Tailscale", out var tailscale) ? tailscale : null,
             DefaultShell = ReadDefaultShell(),
             NativeToolPath = startupRepair.NativeToolPath,
+            NativeLauncherPath = startupRepair.NativeLauncherPath,
             RepairLogPath = startupRepair.RepairLogPath,
             LogonRepairTaskName = startupRepair.LogonRepairTaskName,
             StartupRepairTaskName = startupRepair.StartupRepairTaskName,
@@ -293,10 +297,11 @@ internal static class Bootstrapper
 
     private static async Task<StartupRepairPaths> EnsureStartupRepairAsync(string codexRoot, string targetUser, string listenAddress)
     {
-        var nativeToolPath = Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe");
+        var nativeToolPath = Path.Combine(codexRoot, "tools", NativeToolFileName);
+        var nativeLauncherPath = EnsureNativeLauncher(codexRoot, nativeToolPath);
         var repairLogPath = Path.Combine(codexRoot, "logs", "sshd-repair.log");
         var removedLegacyCmdArtifacts = await RemoveLegacyCmdArtifactsAsync(codexRoot, targetUser);
-        var command = BuildSshRepairTaskCommand(codexRoot, listenAddress);
+        var command = BuildSshRepairTaskCommand(codexRoot, listenAddress, nativeLauncherPath);
 
         await EnsureLogonRepairTaskAsync(targetUser, command, LogonRepairTaskName);
         await EnsureSshRepairTasksAsync(command);
@@ -304,6 +309,7 @@ internal static class Bootstrapper
 
         return new StartupRepairPaths(
             nativeToolPath,
+            nativeLauncherPath,
             repairLogPath,
             LogonRepairTaskName,
             RepairStartupTaskName,
@@ -445,12 +451,33 @@ internal static class Bootstrapper
         await RunProcessAllowFailureAsync("schtasks.exe", new[] { "/Run", "/TN", RepairWatchTaskName });
     }
 
-    private static string BuildSshRepairTaskCommand(string codexRoot, string listenAddress)
+    private static string EnsureNativeLauncher(string codexRoot, string nativeToolPath)
     {
-        var nativeToolPath = Path.Combine(codexRoot, "tools", "WindowsRemoteExecutor.Native.exe");
+        var launcherPath = Path.Combine(codexRoot, "tools", NativeLauncherFileName);
+        var launcher = string.Join(
+                "\r\n",
+                new[]
+                {
+                    "@echo off",
+                    "setlocal",
+                    $"set \"WINDOWS_REMOTE_EXECUTOR_PRIMARY={nativeToolPath}\"",
+                    "if exist \"%WINDOWS_REMOTE_EXECUTOR_PRIMARY%\" (",
+                    "  \"%WINDOWS_REMOTE_EXECUTOR_PRIMARY%\" %*",
+                    "  exit /b %ERRORLEVEL%",
+                    ")",
+                    "echo error: WindowsRemoteExecutor native payload not found. 1>&2",
+                    "exit /b 127",
+                    string.Empty
+                });
+        File.WriteAllText(launcherPath, launcher, new UTF8Encoding(false));
+        return launcherPath;
+    }
+
+    private static string BuildSshRepairTaskCommand(string codexRoot, string listenAddress, string nativeLauncherPath)
+    {
         var repairLogPath = Path.Combine(codexRoot, "logs", "sshd-repair.log");
         return BuildTaskCommand(
-            nativeToolPath,
+            nativeLauncherPath,
             "repair-sshd",
             "--expected-listen-address",
             listenAddress,
@@ -676,6 +703,7 @@ internal static class Bootstrapper
 
 internal sealed record StartupRepairPaths(
     string NativeToolPath,
+    string NativeLauncherPath,
     string RepairLogPath,
     string LogonRepairTaskName,
     string StartupRepairTaskName,

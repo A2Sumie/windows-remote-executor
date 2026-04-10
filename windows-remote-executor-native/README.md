@@ -17,7 +17,7 @@ The current native CLI exposes:
 - `powershell-b64`
 - `everything-b64`
 
-`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, removes any legacy `cmd` recovery artifacts, installs direct native `repair-sshd` scheduled tasks for logon/startup/watch recovery, configures service startup and recovery actions, and starts `sshd`.
+`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, removes any legacy `cmd` recovery artifacts, installs launcher-based `repair-sshd` scheduled tasks for logon/startup/watch recovery, configures service startup and recovery actions, and starts `sshd`.
 
 `guard-sshd` reads `access-policy.json`, checks configured and active `sshd` listeners, and disables the service when the host is in an unsafe state.
 
@@ -113,8 +113,9 @@ If you need to revert a host that was already switched to a PowerShell login she
 - `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.
 - `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
+- `WindowsRemoteExecutor.cmd` is the stable launcher path; versioned native payloads can live under `C:\CodexRemote\tools\releases\...`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.
 - Bootstrap installs three headless repair tasks: `CodexRemote Sshd Repair Logon`, `CodexRemote Sshd Repair Startup`, and `CodexRemote Sshd Repair Watch`.
-- Those tasks invoke `repair-sshd` directly, so recovery no longer depends on `cmd.exe` wrappers or visible console windows.
+- Those tasks invoke the stable launcher for `repair-sshd`, so recovery no longer depends on `cmd.exe` wrappers or visible console windows and hot updates do not need to overwrite an in-use `.exe`.
 - `sshd` also gets Windows service recovery actions plus scheduled repair watch tasks so a later service stop is less likely to strand the host.
 - Everything search still depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.

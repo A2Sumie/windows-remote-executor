@@ -216,6 +216,20 @@ def tool_specs() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "win_tasks",
+            "description": "Read scheduled-task state through the wrapper so task names with spaces stay structured.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "task_names": {"type": "array", "items": {"type": "string"}},
+                    "task_prefix": {"type": "string"},
+                },
+                "required": ["target"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "win_exec_ps_file",
             "description": "Run a PowerShell file through the wrapper's controlled UTF-8/base64 path.",
             "inputSchema": {
@@ -331,6 +345,15 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
                 argv.extend(["--expected-listen-address", expected])
             result = run_win_remote(argv)
             return format_result(result)
+
+        if name == "win_tasks":
+            argv = ["tasks", require_str(arguments, "target")]
+            for task_name in optional_str_list(arguments, "task_names"):
+                argv.extend(["--task-name", task_name])
+            if task_prefix := optional_str(arguments, "task_prefix"):
+                argv.extend(["--prefix", task_prefix])
+            result = run_win_remote(argv)
+            return format_result(result, parse_stdout_json=True)
 
         if name == "win_exec_ps_file":
             result = run_win_remote(

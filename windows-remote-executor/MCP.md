@@ -41,6 +41,7 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_get`
 - `win_guard`
 - `win_repair`
+- `win_tasks`
 - `win_exec_ps_file`
 - `win_exec_ps_script`
 
