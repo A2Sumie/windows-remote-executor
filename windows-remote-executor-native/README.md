@@ -33,7 +33,7 @@ The current native CLI exposes:
 
 `wsl-b64` and `wsl-capture-b64` run Linux programs through `wsl.exe --exec` with structured distro/user/cwd arguments.
 
-`wsl-script-b64` and `wsl-script-capture-b64` write a temporary shell script on the Windows side, translate the path into WSL form, and run it through a Linux shell without requiring `bash -lc` string composition.
+`wsl-script-b64` and `wsl-script-capture-b64` write a temporary shell script on the Windows side, translate the path into WSL form, and run it through a Linux shell without requiring `bash -lc` string composition. The higher-level `win-remote wsl-sh` wrapper now stages longer local scripts through file transfer first so it does not have to expand the whole payload into the Windows command line.
 
 `capture-b64` executes a native process and prints one JSON object with:
 

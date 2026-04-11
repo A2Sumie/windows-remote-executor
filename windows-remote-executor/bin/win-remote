@@ -349,6 +349,49 @@ json_array_from_values() {
   printf '%s' "${rendered}"
 }
 
+remote_windows_path_to_wsl() {
+  local remote_path
+  remote_path="$(normalize_remote_path "$1")"
+
+  if [[ ! "${remote_path}" =~ ^([A-Za-z]):(/.*)?$ ]]; then
+    die "Cannot translate non-drive Windows path to WSL: ${remote_path}"
+  fi
+
+  local drive="${BASH_REMATCH[1]}"
+  drive="$(printf '%s' "${drive}" | tr '[:upper:]' '[:lower:]')"
+  local remainder="${BASH_REMATCH[2]:-}"
+  printf '/mnt/%s%s' "${drive}" "${remainder}"
+}
+
+generate_stage_id() {
+  printf '%s-%s-%04x' "$(date +%Y%m%d-%H%M%S)" "$$" "$((RANDOM & 0xffff))"
+}
+
+render_wsl_stage_bootstrap() {
+  cat <<'EOF'
+set -eu
+src="$1"
+dst="$2"
+shell_path="$3"
+shift 3
+cleanup() {
+  rm -f "$dst"
+}
+trap cleanup EXIT
+cp "$src" "$dst"
+chmod 700 "$dst"
+"$shell_path" "$dst" "$@"
+EOF
+}
+
+cleanup_remote_dir_best_effort() {
+  local remote_dir
+  remote_dir="$(normalize_remote_path "$1")"
+  local remote_dir_cmd
+  remote_dir_cmd="$(remote_cmd_path "${remote_dir}")"
+  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist ${remote_dir_cmd} rmdir /s /q ${remote_dir_cmd}\"" >/dev/null 2>&1 || true
+}
+
 render_native_launcher() {
   local primary_path="$1"
   local fallback_path="$2"
@@ -697,45 +740,6 @@ cmd_wsl_capture() {
   return "${capture_status}"
 }
 
-read_wsl_script_source() {
-  local command_name="$1"
-  shift
-
-  case "${1:-}" in
-    --file)
-      [[ $# -ge 2 ]] || die "${command_name} --file requires a local file path"
-      [[ -f "$2" ]] || die "Local file not found: $2"
-      cat "$2"
-      ;;
-    --stdin)
-      shift
-      if [[ "${1:-}" == "--" ]]; then
-        shift
-      fi
-      cat
-      ;;
-    "")
-      die "${command_name} requires inline shell, --file <local-sh>, or --stdin"
-      ;;
-    *)
-      local -a inline_parts=()
-      while [[ $# -gt 0 ]]; do
-        case "$1" in
-          --)
-            break
-            ;;
-          *)
-            inline_parts+=("$1")
-            shift
-            ;;
-        esac
-      done
-      [[ ${#inline_parts[@]} -gt 0 ]] || die "${command_name} requires inline shell, --file <local-sh>, or --stdin"
-      printf '%s' "${inline_parts[*]}"
-      ;;
-  esac
-}
-
 cmd_wsl_sh() {
   [[ $# -ge 2 ]] || die "wsl-sh requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
   local target="$1"
@@ -779,23 +783,27 @@ cmd_wsl_sh() {
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
 
   local source_mode="${1:-}"
-  local script_text=""
+  local local_script_path=""
+  local cleanup_local_script=0
   local -a script_args=()
   case "${source_mode}" in
     --file)
       [[ $# -ge 2 ]] || die "wsl-sh --file requires a local file path"
-      script_text="$(read_wsl_script_source "wsl-sh" "$1" "$2")"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      local_script_path="$2"
       shift 2
       if [[ "${1:-}" == "--" ]]; then
         shift
       fi
       ;;
     --stdin)
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
       shift
       if [[ "${1:-}" == "--" ]]; then
         shift
       fi
-      script_text="$(cat)"
+      cat >"${local_script_path}"
       ;;
     *)
       local -a inline_parts=()
@@ -812,12 +820,27 @@ cmd_wsl_sh() {
         esac
       done
       [[ ${#inline_parts[@]} -gt 0 ]] || die "wsl-sh requires inline shell, --file <local-sh>, or --stdin"
-      script_text="${inline_parts[*]}"
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
+      printf '%s' "${inline_parts[*]}" >"${local_script_path}"
       ;;
   esac
   script_args=("$@")
 
-  local -a native_tokens=("wsl-script-b64" "--script" "$(encode_utf8_b64 "${script_text}")" "--shell" "$(encode_utf8_b64 "${shell_path}")")
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/wsl-script-${stage_id}"
+  local remote_stage_path="${remote_stage_dir}/payload.sh"
+  local stage_wsl_path
+  stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
+  local linux_temp_path="/tmp/windows-remote-executor-${stage_id}.sh"
+  local bootstrap_script
+  bootstrap_script="$(render_wsl_stage_bootstrap)"
+
+  ensure_remote_dir "${remote_stage_dir}"
+  scp_to_remote "${local_script_path}" "${remote_stage_path}"
+
+  local -a native_tokens=("wsl-script-b64" "--script" "$(encode_utf8_b64 "${bootstrap_script}")" "--shell" "$(encode_utf8_b64 "/bin/sh")")
   if [[ -n "${cwd}" ]]; then
     native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
   fi
@@ -827,6 +850,9 @@ cmd_wsl_sh() {
   if [[ -n "${linux_user}" ]]; then
     native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
   fi
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${stage_wsl_path}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${linux_temp_path}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${shell_path}")")
 
   if [[ ${#script_args[@]} -gt 0 ]]; then
     local arg
@@ -835,7 +861,19 @@ cmd_wsl_sh() {
     done
   fi
 
-  ssh_exec_native_tokens "${native_tokens[@]}"
+  local run_status=0
+  if ssh_exec_native_tokens "${native_tokens[@]}"; then
+    run_status=0
+  else
+    run_status=$?
+  fi
+
+  if [[ ${cleanup_local_script} -eq 1 ]]; then
+    rm -f "${local_script_path}"
+  fi
+  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+
+  return "${run_status}"
 }
 
 cmd_wsl_sh_capture() {
@@ -887,23 +925,27 @@ cmd_wsl_sh_capture() {
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
 
   local source_mode="${1:-}"
-  local script_text=""
+  local local_script_path=""
+  local cleanup_local_script=0
   local -a script_args=()
   case "${source_mode}" in
     --file)
       [[ $# -ge 2 ]] || die "wsl-sh-capture --file requires a local file path"
-      script_text="$(read_wsl_script_source "wsl-sh-capture" "$1" "$2")"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      local_script_path="$2"
       shift 2
       if [[ "${1:-}" == "--" ]]; then
         shift
       fi
       ;;
     --stdin)
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
       shift
       if [[ "${1:-}" == "--" ]]; then
         shift
       fi
-      script_text="$(cat)"
+      cat >"${local_script_path}"
       ;;
     *)
       local -a inline_parts=()
@@ -920,12 +962,27 @@ cmd_wsl_sh_capture() {
         esac
       done
       [[ ${#inline_parts[@]} -gt 0 ]] || die "wsl-sh-capture requires inline shell, --file <local-sh>, or --stdin"
-      script_text="${inline_parts[*]}"
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
+      printf '%s' "${inline_parts[*]}" >"${local_script_path}"
       ;;
   esac
   script_args=("$@")
 
-  local -a native_tokens=("wsl-script-capture-b64" "--script" "$(encode_utf8_b64 "${script_text}")" "--shell" "$(encode_utf8_b64 "${shell_path}")")
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/wsl-script-${stage_id}"
+  local remote_stage_path="${remote_stage_dir}/payload.sh"
+  local stage_wsl_path
+  stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
+  local linux_temp_path="/tmp/windows-remote-executor-${stage_id}.sh"
+  local bootstrap_script
+  bootstrap_script="$(render_wsl_stage_bootstrap)"
+
+  ensure_remote_dir "${remote_stage_dir}"
+  scp_to_remote "${local_script_path}" "${remote_stage_path}"
+
+  local -a native_tokens=("wsl-script-capture-b64" "--script" "$(encode_utf8_b64 "${bootstrap_script}")" "--shell" "$(encode_utf8_b64 "/bin/sh")")
   if [[ -n "${cwd}" ]]; then
     native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
   fi
@@ -935,6 +992,9 @@ cmd_wsl_sh_capture() {
   if [[ -n "${linux_user}" ]]; then
     native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
   fi
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${stage_wsl_path}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${linux_temp_path}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${shell_path}")")
 
   if [[ ${#script_args[@]} -gt 0 ]]; then
     local arg
@@ -950,6 +1010,11 @@ cmd_wsl_sh_capture() {
   else
     capture_status=$?
   fi
+
+  if [[ ${cleanup_local_script} -eq 1 ]]; then
+    rm -f "${local_script_path}"
+  fi
+  cleanup_remote_dir_best_effort "${remote_stage_dir}"
 
   print_capture_output "${capture_output}" "${out_file}"
   return "${capture_status}"

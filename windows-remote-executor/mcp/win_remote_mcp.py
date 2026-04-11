@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.7"
+SERVER_VERSION = "0.1.8"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 
@@ -195,7 +195,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl_script",
-            "description": "Run a shell script through WSL without composing bash -lc command strings.",
+            "description": "Run a shell script through WSL through staged file transfer instead of composing bash -lc command strings.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -213,7 +213,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl_script_capture",
-            "description": "Run a shell script through WSL and return structured stdout/stderr capture.",
+            "description": "Run a shell script through WSL through staged file transfer and return structured stdout/stderr capture.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

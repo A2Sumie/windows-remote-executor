@@ -25,6 +25,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
 - Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
 - Use `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, or MCP `win_wsl*` for Linux-side work inside WSL.
+- `win-remote wsl-sh` now stages local scripts through file transfer and executes them from WSL ext4 temp space, so it avoids Windows command-line length failures.
 - Use `win-remote capture` when output encoding is unknown, localized, UTF-16-shaped, or byte-sensitive and you need stable JSON plus raw base64 bytes.
 - Use `win-remote py` for Python scripts on the Windows host.
 - Use `win-remote put` and `win-remote get` for file transfer.
@@ -52,12 +53,16 @@ Treat raw PowerShell command lines as disallowed.
 - Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
 - If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, or MCP `win_wsl_script` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
+- Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
+- Keep long-lived models, caches, and active code on WSL ext4 such as `/home/...`, not on `/mnt/*`.
+- When a WSL workload depends on a specific interpreter or GPU tool, prefer absolute paths such as `/home/.../.venv/bin/python` and `/usr/lib/wsl/lib/nvidia-smi`.
 
 ## Encoding Rule
 
 - Assume localized Windows CLI output may be UTF-16 or codepage-shaped and unsuitable for parsing over SSH.
 - Treat `win-remote run` as a human-oriented, best-effort text path.
 - Use `win-remote capture` when you need exact bytes, detected encoding labels, or stable machine parsing of stdout/stderr.
+- Prefer `wsl-capture` over PTY scraping for machine decisions from Linux-side commands.
 - Do not make automation decisions from mojibake text returned by `wsl.exe`, `dism.exe`, `systeminfo.exe`, or any localized CLI unless you captured bytes or emitted JSON on the Windows side.
 - Prefer JSON from Windows-local PowerShell when the result is state, and prefer `capture` when the result is process output.
 

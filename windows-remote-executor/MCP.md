@@ -58,7 +58,8 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 ## WSL stance
 
 - Prefer `win_wsl` and `win_wsl_script` over composing `wsl.exe ... bash -lc ...`.
-- Use `win_wsl_script` when the client has a local shell script body and wants the server to handle temp-file staging and WSL path translation.
+- `win_wsl_script` now goes through the wrapper's staged-file path, so it does not depend on expanding the whole script body into the Windows command line.
+- Keep long-lived models, caches, and WSL virtualenvs on ext4 paths such as `/home/...`; use `win_wsl` only to bridge into that Linux-native tree.
 
 ## Recommended client stance
 

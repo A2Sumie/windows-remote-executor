@@ -138,6 +138,8 @@ Run Linux programs and shell scripts inside WSL without composing `wsl.exe ... b
 cat ./scripts/check-linux.sh | ./windows-remote-executor/bin/win-remote wsl-sh winbox --stdin -- --flag alpha
 ```
 
+`wsl-sh` now stages the script through `scp`, copies it into a Linux-native temp path such as `/tmp/...` inside WSL, and executes it there. That avoids Windows command-line length failures and avoids accidentally running the script body straight from `/mnt/c/...`.
+
 Capture localized or byte-sensitive output as JSON:
 
 ```bash
@@ -210,8 +212,12 @@ When `access-policy.json` contains an access token hash, native commands such as
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.
 - Use `wsl`, `wsl-capture`, and `wsl-sh` for Linux-side work inside WSL. They avoid the common `wsl.exe ... bash -lc ...` and `/mnt/c/...` quoting failures.
+- `wsl.exe` under `run` is still fine for Windows-side WSL administration such as `--install`, `--set-default-version`, and `--shutdown`, but not for Linux-side workload launch.
+- Keep long-lived models, caches, virtualenvs, and hot code on the WSL ext4 filesystem such as `/home/...`, not under `/mnt/c` or `/mnt/d`, or load times will collapse.
+- If you update Windows-side files for a WSL workload, explicitly copy them into the WSL ext4 working tree before you trust the result. A changed `D:/...` tree does not automatically mean `/home/...` is updated.
+- Inside WSL, prefer absolute executables for brittle dependencies. For example, use `/usr/lib/wsl/lib/nvidia-smi` for GPU queries and absolute venv interpreters such as `/home/sumie/amt_asr_wsl/.venv-vllm/bin/python` for workload entrypoints.
 - Prefer `run` for human-facing command execution and progress logs.
-- Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
+- Prefer `capture` or `wsl-capture` when stdout/stderr may be UTF-16, locale-codepage, binary-adjacent, or otherwise too brittle for plain PTY parsing.
 - On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
 - Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.

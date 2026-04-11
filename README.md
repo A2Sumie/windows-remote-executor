@@ -15,6 +15,7 @@ For agentic clients, the preferred control plane is now the structured MCP serve
 - structured capture for localized or byte-sensitive process output
 - Windows-local PowerShell decode path for the cases where PowerShell is unavoidable
 - structured WSL program and script execution so Linux-side work does not need `wsl.exe ... bash -lc ...`
+- staged WSL script transfer so longer shell payloads do not hit Windows command-line length limits
 - a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
 - structured scheduled-task inspection so task names with spaces do not need handwritten PowerShell quoting
 - JSON host probing
@@ -62,6 +63,7 @@ If an agent opens this repository cold, the shortest safe path is:
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
 4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
 5. Prefer the MCP server for routine agent use; use `exec --file` only when PowerShell is actually needed.
+6. Keep long-lived WSL workloads on ext4 paths such as `/home/...`, not `/mnt/*`, and prefer `wsl-capture` plus absolute interpreters for machine decisions.
 
 ## License
 

@@ -18,15 +18,17 @@ Operating rules:
 4. On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
 5. If the result is process output and needs stable parsing, prefer `win-remote capture`, which returns JSON with detected encodings plus raw base64 stdout/stderr bytes.
 6. If the result is Windows state, prefer `win-remote exec --stdin` and emit JSON from Windows-local PowerShell instead of parsing localized CLI output over SSH.
-7. For WSL/Linux setup, prefer `win-remote wsl`, `wsl-capture`, or `wsl-sh --file/--stdin` instead of nesting `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
+7. For WSL/Linux setup, prefer `win-remote wsl`, `wsl-capture`, or `wsl-sh --file/--stdin` instead of nesting `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths. `wsl-sh` stages scripts through file transfer, so it is the safe path for longer scripts too.
 8. Do not invoke the Windows native executor directly unless you have a specific reason. Let `win-remote` handle base64 transport and `--access-token`.
 9. Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
 10. Do not tunnel raw `powershell.exe` or `pwsh` through `win-remote run` or `win-remote capture`; those paths should fail closed by default.
 11. Assume the host should remain `private-only` unless the operator explicitly says otherwise.
 12. Never weaken `access-policy.json`, remove the `sshd` guard, or permit wildcard listeners without explicit operator approval.
 13. Never commit real host env files, access tokens, hostnames, Tailscale IPs, usernames, SSH keys, logs, or publish outputs.
-14. Prefer the framework-dependent `.NET 8` publish when the Windows host already has the `.NET 8` runtime installed.
-15. Use the self-contained publish only when the host cannot satisfy the framework-dependent runtime requirement.
+14. Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
+15. Keep long-lived models, caches, venvs, and hot code on WSL ext4 paths such as `/home/...`, not on `/mnt/*`, and prefer absolute WSL interpreter paths plus `/usr/lib/wsl/lib/nvidia-smi` for brittle tooling.
+16. Prefer the framework-dependent `.NET 8` publish when the Windows host already has the `.NET 8` runtime installed.
+17. Use the self-contained publish only when the host cannot satisfy the framework-dependent runtime requirement.
 
 Suggested workflow:
 1. Read `windows-remote-executor/README.md` and `windows-remote-executor-native/README.md`.
