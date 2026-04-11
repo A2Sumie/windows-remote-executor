@@ -14,8 +14,9 @@ For routine agent use, prefer the structured MCP server in `windows-remote-execu
 
 ## Rules
 
-- Prefer `run`, `capture`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
-- Use `run` for `wsl.exe`, `dism.exe`, and other Windows-native platform tools instead of wrapping them in PowerShell.
+- Prefer `run`, `capture`, `wsl`, `wsl-capture`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
+- Use `run` for `dism.exe` and other Windows-native platform tools instead of wrapping them in PowerShell.
+- Use `wsl`, `wsl-capture`, or `wsl-sh` for Linux-side execution inside WSL.
 - Use `capture` when output may be UTF-16, locale-codepage, or binary-shaped and you need stable JSON plus raw bytes.
 - On `X570`, do not use `win-remote cmd` as part of the normal control path.
 - Treat PowerShell as fallback only.
@@ -25,7 +26,7 @@ For routine agent use, prefer the structured MCP server in `windows-remote-execu
 - If a result needs to be machine-readable, prefer `capture` for process output and `exec --stdin` plus JSON for Windows state.
 - Prefer `tasks` or MCP `win_tasks` for scheduled-task inspection instead of handwritten `Get-ScheduledTaskInfo` calls.
 - `update-tools` now publishes a versioned release and flips `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`, so it can succeed while older executor processes are still running.
-- For complex WSL setup, upload a `.sh` file and execute it with `wsl.exe ... bash /mnt/c/...`.
+- For complex WSL setup, use `wsl-sh --file`, `wsl-sh --stdin`, or MCP `win_wsl_script` instead of `wsl.exe ... bash -lc ...`.
 - Keep hosts `private-only` unless the operator explicitly says otherwise.
 - Do not weaken token enforcement or `sshd` guardrails.
 - Do not commit real env files, tokens, host addresses, usernames, SSH keys, logs, or publish outputs.

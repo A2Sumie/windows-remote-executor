@@ -37,6 +37,10 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_run`
 - `win_capture`
 - `win_py`
+- `win_wsl`
+- `win_wsl_capture`
+- `win_wsl_script`
+- `win_wsl_script_capture`
 - `win_put`
 - `win_get`
 - `win_guard`
@@ -50,6 +54,11 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_run` and `win_capture` still inherit the wrapper guardrails.
 - Raw `powershell.exe` / `pwsh` transport is blocked by default there.
 - If PowerShell is truly required, use `win_exec_ps_file` or `win_exec_ps_script`.
+
+## WSL stance
+
+- Prefer `win_wsl` and `win_wsl_script` over composing `wsl.exe ... bash -lc ...`.
+- Use `win_wsl_script` when the client has a local shell script body and wants the server to handle temp-file staging and WSL path translation.
 
 ## Recommended client stance
 

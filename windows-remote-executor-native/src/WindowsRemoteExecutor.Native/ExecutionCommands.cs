@@ -164,6 +164,129 @@ internal sealed class PowerShellScriptOptions
     }
 }
 
+internal sealed class WslProcessOptions
+{
+    public string FilePath { get; init; } = string.Empty;
+    public string? WorkingDirectory { get; init; }
+    public string? Distribution { get; init; }
+    public string? User { get; init; }
+    public IReadOnlyList<string> Arguments { get; init; } = Array.Empty<string>();
+
+    public static WslProcessOptions FromBase64Args(string[] args)
+    {
+        var filePath = string.Empty;
+        string? workingDirectory = null;
+        string? distribution = null;
+        string? user = null;
+        var processArgs = new List<string>();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--file":
+                    filePath = Base64Args.ReadValue(args, ref i, "--file");
+                    break;
+                case "--cwd":
+                    workingDirectory = Base64Args.ReadValue(args, ref i, "--cwd");
+                    break;
+                case "--distribution":
+                    distribution = Base64Args.ReadValue(args, ref i, "--distribution");
+                    break;
+                case "--user":
+                    user = Base64Args.ReadValue(args, ref i, "--user");
+                    break;
+                case "--arg":
+                    processArgs.Add(Base64Args.ReadValue(args, ref i, "--arg"));
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown WSL option: {args[i]}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new ArgumentException("--file is required.");
+        }
+
+        return new WslProcessOptions
+        {
+            FilePath = filePath,
+            WorkingDirectory = workingDirectory,
+            Distribution = distribution,
+            User = user,
+            Arguments = processArgs
+        };
+    }
+}
+
+internal sealed class WslScriptOptions
+{
+    public string ScriptBody { get; init; } = string.Empty;
+    public string? WorkingDirectory { get; init; }
+    public string? Distribution { get; init; }
+    public string? User { get; init; }
+    public string ShellPath { get; init; } = "/bin/bash";
+    public IReadOnlyList<string> ScriptArguments { get; init; } = Array.Empty<string>();
+
+    public static WslScriptOptions FromBase64Args(string[] args)
+    {
+        var scriptBody = string.Empty;
+        string? workingDirectory = null;
+        string? distribution = null;
+        string? user = null;
+        var shellPath = "/bin/bash";
+        var scriptArgs = new List<string>();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--script":
+                    scriptBody = Base64Args.ReadValue(args, ref i, "--script");
+                    break;
+                case "--cwd":
+                    workingDirectory = Base64Args.ReadValue(args, ref i, "--cwd");
+                    break;
+                case "--distribution":
+                    distribution = Base64Args.ReadValue(args, ref i, "--distribution");
+                    break;
+                case "--user":
+                    user = Base64Args.ReadValue(args, ref i, "--user");
+                    break;
+                case "--shell":
+                    shellPath = Base64Args.ReadValue(args, ref i, "--shell");
+                    break;
+                case "--arg":
+                    scriptArgs.Add(Base64Args.ReadValue(args, ref i, "--arg"));
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown WSL script option: {args[i]}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(scriptBody))
+        {
+            throw new ArgumentException("--script is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(shellPath))
+        {
+            throw new ArgumentException("--shell cannot be empty.");
+        }
+
+        return new WslScriptOptions
+        {
+            ScriptBody = scriptBody,
+            WorkingDirectory = workingDirectory,
+            Distribution = distribution,
+            User = user,
+            ShellPath = shellPath,
+            ScriptArguments = scriptArgs
+        };
+    }
+}
+
 internal static class ExecutionCommands
 {
     public static async Task<int> RunCommandAsync(string[] args)
@@ -238,6 +361,30 @@ internal static class ExecutionCommands
             },
             options.WorkingDirectory,
             OutputEncodingPreference.Utf8);
+    }
+
+    public static async Task<int> RunWslAsync(string[] args)
+    {
+        var options = WslProcessOptions.FromBase64Args(args);
+        return await RunWslProcessAsync(options);
+    }
+
+    public static async Task<int> CaptureWslAsync(string[] args)
+    {
+        var options = WslProcessOptions.FromBase64Args(args);
+        return await CaptureWslProcessAsync(options);
+    }
+
+    public static async Task<int> RunWslScriptAsync(string[] args)
+    {
+        var options = WslScriptOptions.FromBase64Args(args);
+        return await RunWslScriptInternalAsync(options);
+    }
+
+    public static async Task<int> CaptureWslScriptAsync(string[] args)
+    {
+        var options = WslScriptOptions.FromBase64Args(args);
+        return await CaptureWslScriptInternalAsync(options);
     }
 
     private static RunProcessOptions ResolvePythonExecution(PythonScriptOptions options)
@@ -448,6 +595,204 @@ internal static class ExecutionCommands
         }
 
         throw new InvalidOperationException("No usable PowerShell executable found. Pass --exe explicitly or install powershell.exe/pwsh.exe.");
+    }
+
+    private static async Task<int> RunWslProcessAsync(WslProcessOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var arguments = BuildWslArguments(
+            options.WorkingDirectory,
+            options.Distribution,
+            options.User,
+            options.FilePath,
+            options.Arguments);
+
+        return await ProcessRunner.RunPassthroughAsync(
+            executable,
+            arguments,
+            workingDirectory: null,
+            OutputEncodingPreference.Utf8);
+    }
+
+    private static async Task<int> CaptureWslProcessAsync(WslProcessOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var arguments = BuildWslArguments(
+            options.WorkingDirectory,
+            options.Distribution,
+            options.User,
+            options.FilePath,
+            options.Arguments);
+        var result = await ProcessRunner.RunCaptureAsync(
+            executable,
+            arguments,
+            workingDirectory: null,
+            OutputEncodingPreference.Utf8);
+
+        WriteCapturePayload(result);
+        return result.ExitCode;
+    }
+
+    private static async Task<int> RunWslScriptInternalAsync(WslScriptOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var tempWindowsPath = WriteTemporaryWslScript(options.ScriptBody);
+
+        try
+        {
+            var tempWslPath = TranslateWindowsPathToWsl(tempWindowsPath);
+            var arguments = BuildWslArguments(
+                options.WorkingDirectory,
+                options.Distribution,
+                options.User,
+                options.ShellPath,
+                new[] { tempWslPath }.Concat(options.ScriptArguments).ToArray());
+
+            return await ProcessRunner.RunPassthroughAsync(
+                executable,
+                arguments,
+                workingDirectory: null,
+                OutputEncodingPreference.Utf8);
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(tempWindowsPath);
+        }
+    }
+
+    private static async Task<int> CaptureWslScriptInternalAsync(WslScriptOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var tempWindowsPath = WriteTemporaryWslScript(options.ScriptBody);
+
+        try
+        {
+            var tempWslPath = TranslateWindowsPathToWsl(tempWindowsPath);
+            var arguments = BuildWslArguments(
+                options.WorkingDirectory,
+                options.Distribution,
+                options.User,
+                options.ShellPath,
+                new[] { tempWslPath }.Concat(options.ScriptArguments).ToArray());
+            var result = await ProcessRunner.RunCaptureAsync(
+                executable,
+                arguments,
+                workingDirectory: null,
+                OutputEncodingPreference.Utf8);
+
+            WriteCapturePayload(result);
+            return result.ExitCode;
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(tempWindowsPath);
+        }
+    }
+
+    private static string ResolveWslExecutable()
+    {
+        foreach (var candidate in new[] { "wsl.exe", "wsl" })
+        {
+            var discovered = ProbeCollector.TryFindCommand(candidate);
+            if (!string.IsNullOrWhiteSpace(discovered))
+            {
+                return discovered;
+            }
+        }
+
+        var inboxWsl = Path.Combine(Environment.SystemDirectory, "wsl.exe");
+        if (File.Exists(inboxWsl))
+        {
+            return inboxWsl;
+        }
+
+        throw new InvalidOperationException("No usable wsl.exe found on the Windows host.");
+    }
+
+    private static IReadOnlyList<string> BuildWslArguments(
+        string? workingDirectory,
+        string? distribution,
+        string? user,
+        string program,
+        IReadOnlyList<string> arguments)
+    {
+        var commandLine = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(distribution))
+        {
+            commandLine.Add("--distribution");
+            commandLine.Add(distribution);
+        }
+
+        if (!string.IsNullOrWhiteSpace(user))
+        {
+            commandLine.Add("--user");
+            commandLine.Add(user);
+        }
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory))
+        {
+            commandLine.Add("--cd");
+            commandLine.Add(workingDirectory);
+        }
+
+        commandLine.Add("--exec");
+        commandLine.Add(program);
+        commandLine.AddRange(arguments);
+        return commandLine;
+    }
+
+    private static string WriteTemporaryWslScript(string scriptBody)
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), $"windows-remote-executor-{Guid.NewGuid():N}.sh");
+        var normalized = scriptBody.Replace("\r\n", "\n");
+        File.WriteAllText(tempPath, normalized, new UTF8Encoding(false));
+        return tempPath;
+    }
+
+    private static string TranslateWindowsPathToWsl(string windowsPath)
+    {
+        var fullPath = Path.GetFullPath(windowsPath);
+        if (fullPath.Length < 3 || fullPath[1] != ':')
+        {
+            throw new InvalidOperationException($"Cannot translate non-drive Windows path to WSL: {windowsPath}");
+        }
+
+        var drive = char.ToLowerInvariant(fullPath[0]);
+        var remainder = fullPath[2..].Replace('\\', '/');
+        return $"/mnt/{drive}{remainder}";
+    }
+
+    private static void TryDeleteTemporaryFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Best effort cleanup for transient WSL script files.
+        }
+    }
+
+    private static void WriteCapturePayload(ProcessResult result)
+    {
+        var payload = new
+        {
+            exitCode = result.ExitCode,
+            stdoutText = result.StdOut,
+            stderrText = result.StdErr,
+            stdoutEncoding = result.StdOutEncoding,
+            stderrEncoding = result.StdErrEncoding,
+            stdoutBase64 = Convert.ToBase64String(result.StdOutBytes),
+            stderrBase64 = Convert.ToBase64String(result.StdErrBytes),
+            stdoutBytes = result.StdOutBytes.Length,
+            stderrBytes = result.StdErrBytes.Length
+        };
+        Console.WriteLine(JsonSerializer.Serialize(payload));
     }
 
     private static string ComposePowerShellScript(string body)

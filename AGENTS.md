@@ -23,7 +23,8 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 ## Command Choice
 
 - Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
-- Use `win-remote run` for Windows-native platform tools such as `wsl.exe`, `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
+- Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
+- Use `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, or MCP `win_wsl*` for Linux-side work inside WSL.
 - Use `win-remote capture` when output encoding is unknown, localized, UTF-16-shaped, or byte-sensitive and you need stable JSON plus raw base64 bytes.
 - Use `win-remote py` for Python scripts on the Windows host.
 - Use `win-remote put` and `win-remote get` for file transfer.
@@ -50,7 +51,7 @@ Treat raw PowerShell command lines as disallowed.
 - Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
 - Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
-- If the goal is WSL or Linux setup, upload a `.sh` file and invoke `wsl.exe ... bash /mnt/c/...` via `win-remote run`.
+- If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, or MCP `win_wsl_script` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
 
 ## Encoding Rule
 

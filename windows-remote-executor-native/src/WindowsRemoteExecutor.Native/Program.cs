@@ -72,6 +72,22 @@ internal static class Program
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
                     return await ExecutionCommands.RunPowerShellAsync(commandArgs);
 
+                case "wsl-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.RunWslAsync(commandArgs);
+
+                case "wsl-capture-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.CaptureWslAsync(commandArgs);
+
+                case "wsl-script-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.RunWslScriptAsync(commandArgs);
+
+                case "wsl-script-capture-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.CaptureWslScriptAsync(commandArgs);
+
                 case "everything-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
                     return EverythingSearch.SearchToStdout(commandArgs);
@@ -114,6 +130,10 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
               WindowsRemoteExecutor.Native.exe python-b64 [options]
               WindowsRemoteExecutor.Native.exe powershell-b64 [options]
+              WindowsRemoteExecutor.Native.exe wsl-b64 [options]
+              WindowsRemoteExecutor.Native.exe wsl-capture-b64 [options]
+              WindowsRemoteExecutor.Native.exe wsl-script-b64 [options]
+              WindowsRemoteExecutor.Native.exe wsl-script-capture-b64 [options]
               WindowsRemoteExecutor.Native.exe everything-b64 [options]
 
             bootstrap options:
@@ -159,6 +179,36 @@ internal static class Program
               --script <base64-utf8-script-body>
               --cwd <base64-utf8-working-directory>
               --exe <base64-utf8-powershell-path-or-command>
+
+            wsl-b64 options:
+              --file <base64-utf8-linux-path>
+              --cwd <base64-utf8-linux-working-directory>
+              --distribution <base64-utf8-distro-name>
+              --user <base64-utf8-linux-user>
+              --arg <base64-utf8-argument>
+
+            wsl-capture-b64 options:
+              --file <base64-utf8-linux-path>
+              --cwd <base64-utf8-linux-working-directory>
+              --distribution <base64-utf8-distro-name>
+              --user <base64-utf8-linux-user>
+              --arg <base64-utf8-argument>
+
+            wsl-script-b64 options:
+              --script <base64-utf8-shell-script-body>
+              --shell <base64-utf8-linux-shell-path>
+              --cwd <base64-utf8-linux-working-directory>
+              --distribution <base64-utf8-distro-name>
+              --user <base64-utf8-linux-user>
+              --arg <base64-utf8-script-argument>
+
+            wsl-script-capture-b64 options:
+              --script <base64-utf8-shell-script-body>
+              --shell <base64-utf8-linux-shell-path>
+              --cwd <base64-utf8-linux-working-directory>
+              --distribution <base64-utf8-distro-name>
+              --user <base64-utf8-linux-user>
+              --arg <base64-utf8-script-argument>
 
             everything-b64 options:
               --query <base64-utf8-query>

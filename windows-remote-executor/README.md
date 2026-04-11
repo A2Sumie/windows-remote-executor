@@ -129,11 +129,20 @@ Run native programs and Python without a shell hop:
 ./windows-remote-executor/bin/win-remote py winbox C:/CodexRemote/inbox/echo_args.py --cwd C:/CodexRemote/inbox -- --plain alpha beta
 ```
 
+Run Linux programs and shell scripts inside WSL without composing `wsl.exe ... bash -lc ...`:
+
+```bash
+./windows-remote-executor/bin/win-remote wsl winbox --cwd /tmp /usr/bin/whoami
+./windows-remote-executor/bin/win-remote wsl-capture winbox --out ./wsl-uname.json /usr/bin/uname -a
+./windows-remote-executor/bin/win-remote wsl-sh winbox --cwd /tmp --file ./scripts/check-linux.sh -- --flag alpha
+cat ./scripts/check-linux.sh | ./windows-remote-executor/bin/win-remote wsl-sh winbox --stdin -- --flag alpha
+```
+
 Capture localized or byte-sensitive output as JSON:
 
 ```bash
-./windows-remote-executor/bin/win-remote capture winbox wsl.exe --status
-./windows-remote-executor/bin/win-remote capture winbox --out ./wsl-status.json wsl.exe --status
+./windows-remote-executor/bin/win-remote capture winbox netsh.exe interface ipv4 show interfaces
+./windows-remote-executor/bin/win-remote capture winbox --out ./netsh-interfaces.json netsh.exe interface ipv4 show interfaces
 ```
 
 Deploy a directory and optionally run a post-step through the Windows-local PowerShell decoder:
@@ -192,7 +201,7 @@ The guard logic is intentionally conservative.
 - `public-with-token` is allowed only when the policy explicitly says so and an access token hash is configured
 - the probe and guard output always surfaces the policy label, exposure mode, and whether a token is required
 
-When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument.
+When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument.
 
 ## Notes
 
@@ -200,6 +209,7 @@ When `access-policy.json` contains an access token hash, native commands such as
 - `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.
+- Use `wsl`, `wsl-capture`, and `wsl-sh` for Linux-side work inside WSL. They avoid the common `wsl.exe ... bash -lc ...` and `/mnt/c/...` quoting failures.
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` when stdout/stderr may be UTF-16, locale-codepage, or binary-adjacent and you need stable JSON plus raw bytes.
 - On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.

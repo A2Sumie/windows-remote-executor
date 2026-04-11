@@ -15,6 +15,10 @@ Usage:
   win-remote cmd <target> <cmd-code>
   win-remote run <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]
   win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
+  win-remote wsl <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] <program> [args...]
+  win-remote wsl-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] <program> [args...]
+  win-remote wsl-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-sh-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
   win-remote py <target> <remote-script-path> [--cwd <remote-dir>] [--python <remote-python>] [--conda-env <name> | --conda-prefix <prefix>] [-- <script-args...>]
   win-remote find <target> <query> [--max <count>]
   win-remote probe <target> [--out <local-json-file>]
@@ -536,6 +540,418 @@ cmd_capture() {
     printf '%s\n' "${capture_output}"
   fi
 
+  return "${capture_status}"
+}
+
+print_capture_output() {
+  local capture_output="$1"
+  local out_file="${2:-}"
+
+  if [[ -n "${out_file}" ]]; then
+    mkdir -p "$(dirname "${out_file}")"
+    printf '%s\n' "${capture_output}" | tee "${out_file}"
+    return
+  fi
+
+  printf '%s\n' "${capture_output}"
+}
+
+cmd_wsl() {
+  [[ $# -ge 2 ]] || die "wsl requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] <program> [args...]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [[ $# -ge 1 ]] || die "wsl requires a Linux program path"
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+
+  local program="$1"
+  shift
+
+  local -a native_tokens=("wsl-b64" "--file" "$(encode_utf8_b64 "${program}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+
+  local arg
+  for arg in "$@"; do
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+  done
+
+  ssh_exec_native_tokens "${native_tokens[@]}"
+}
+
+cmd_wsl_capture() {
+  [[ $# -ge 2 ]] || die "wsl-capture requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] <program> [args...]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  local out_file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a local file path"
+        out_file="$2"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [[ $# -ge 1 ]] || die "wsl-capture requires a Linux program path"
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+
+  local program="$1"
+  shift
+
+  local -a native_tokens=("wsl-capture-b64" "--file" "$(encode_utf8_b64 "${program}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+
+  local arg
+  for arg in "$@"; do
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+  done
+
+  local capture_output=""
+  local capture_status=0
+  if capture_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    capture_status=0
+  else
+    capture_status=$?
+  fi
+
+  print_capture_output "${capture_output}" "${out_file}"
+  return "${capture_status}"
+}
+
+read_wsl_script_source() {
+  local command_name="$1"
+  shift
+
+  case "${1:-}" in
+    --file)
+      [[ $# -ge 2 ]] || die "${command_name} --file requires a local file path"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      cat "$2"
+      ;;
+    --stdin)
+      shift
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      cat
+      ;;
+    "")
+      die "${command_name} requires inline shell, --file <local-sh>, or --stdin"
+      ;;
+    *)
+      local -a inline_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --)
+            break
+            ;;
+          *)
+            inline_parts+=("$1")
+            shift
+            ;;
+        esac
+      done
+      [[ ${#inline_parts[@]} -gt 0 ]] || die "${command_name} requires inline shell, --file <local-sh>, or --stdin"
+      printf '%s' "${inline_parts[*]}"
+      ;;
+  esac
+}
+
+cmd_wsl_sh() {
+  [[ $# -ge 2 ]] || die "wsl-sh requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  local shell_path=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --shell)
+        [[ $# -ge 2 ]] || die "--shell requires a Linux shell path"
+        shell_path="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+  [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
+
+  local source_mode="${1:-}"
+  local script_text=""
+  local -a script_args=()
+  case "${source_mode}" in
+    --file)
+      [[ $# -ge 2 ]] || die "wsl-sh --file requires a local file path"
+      script_text="$(read_wsl_script_source "wsl-sh" "$1" "$2")"
+      shift 2
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      ;;
+    --stdin)
+      shift
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      script_text="$(cat)"
+      ;;
+    *)
+      local -a inline_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --)
+            shift
+            break
+            ;;
+          *)
+            inline_parts+=("$1")
+            shift
+            ;;
+        esac
+      done
+      [[ ${#inline_parts[@]} -gt 0 ]] || die "wsl-sh requires inline shell, --file <local-sh>, or --stdin"
+      script_text="${inline_parts[*]}"
+      ;;
+  esac
+  script_args=("$@")
+
+  local -a native_tokens=("wsl-script-b64" "--script" "$(encode_utf8_b64 "${script_text}")" "--shell" "$(encode_utf8_b64 "${shell_path}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+
+  if [[ ${#script_args[@]} -gt 0 ]]; then
+    local arg
+    for arg in "${script_args[@]}"; do
+      native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+    done
+  fi
+
+  ssh_exec_native_tokens "${native_tokens[@]}"
+}
+
+cmd_wsl_sh_capture() {
+  [[ $# -ge 2 ]] || die "wsl-sh-capture requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  local shell_path=""
+  local out_file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --shell)
+        [[ $# -ge 2 ]] || die "--shell requires a Linux shell path"
+        shell_path="$2"
+        shift 2
+        ;;
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a local file path"
+        out_file="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+  [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
+
+  local source_mode="${1:-}"
+  local script_text=""
+  local -a script_args=()
+  case "${source_mode}" in
+    --file)
+      [[ $# -ge 2 ]] || die "wsl-sh-capture --file requires a local file path"
+      script_text="$(read_wsl_script_source "wsl-sh-capture" "$1" "$2")"
+      shift 2
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      ;;
+    --stdin)
+      shift
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      script_text="$(cat)"
+      ;;
+    *)
+      local -a inline_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --)
+            shift
+            break
+            ;;
+          *)
+            inline_parts+=("$1")
+            shift
+            ;;
+        esac
+      done
+      [[ ${#inline_parts[@]} -gt 0 ]] || die "wsl-sh-capture requires inline shell, --file <local-sh>, or --stdin"
+      script_text="${inline_parts[*]}"
+      ;;
+  esac
+  script_args=("$@")
+
+  local -a native_tokens=("wsl-script-capture-b64" "--script" "$(encode_utf8_b64 "${script_text}")" "--shell" "$(encode_utf8_b64 "${shell_path}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+
+  if [[ ${#script_args[@]} -gt 0 ]]; then
+    local arg
+    for arg in "${script_args[@]}"; do
+      native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+    done
+  fi
+
+  local capture_output=""
+  local capture_status=0
+  if capture_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    capture_status=0
+  else
+    capture_status=$?
+  fi
+
+  print_capture_output "${capture_output}" "${out_file}"
   return "${capture_status}"
 }
 
@@ -1449,6 +1865,18 @@ main() {
       ;;
     capture)
       cmd_capture "$@"
+      ;;
+    wsl)
+      cmd_wsl "$@"
+      ;;
+    wsl-capture)
+      cmd_wsl_capture "$@"
+      ;;
+    wsl-sh)
+      cmd_wsl_sh "$@"
+      ;;
+    wsl-sh-capture)
+      cmd_wsl_sh_capture "$@"
       ;;
     py)
       cmd_py "$@"

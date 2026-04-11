@@ -15,6 +15,10 @@ The current native CLI exposes:
 - `capture-b64`
 - `python-b64`
 - `powershell-b64`
+- `wsl-b64`
+- `wsl-capture-b64`
+- `wsl-script-b64`
+- `wsl-script-capture-b64`
 - `everything-b64`
 
 `bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, removes any legacy `cmd` recovery artifacts, installs launcher-based `repair-sshd` scheduled tasks for logon/startup/watch recovery, configures service startup and recovery actions, and starts `sshd`.
@@ -25,7 +29,11 @@ The current native CLI exposes:
 
 `probe` returns machine state plus the active exposure policy label, listen addresses, and whether an access token is required.
 
-`run-b64`, `python-b64`, and `powershell-b64` execute payloads without depending on local shell quoting on the controlling machine.
+`run-b64`, `python-b64`, `powershell-b64`, and the WSL commands execute payloads without depending on local shell quoting on the controlling machine.
+
+`wsl-b64` and `wsl-capture-b64` run Linux programs through `wsl.exe --exec` with structured distro/user/cwd arguments.
+
+`wsl-script-b64` and `wsl-script-capture-b64` write a temporary shell script on the Windows side, translate the path into WSL form, and run it through a Linux shell without requiring `bash -lc` string composition.
 
 `capture-b64` executes a native process and prints one JSON object with:
 
@@ -51,7 +59,7 @@ Use it when output may be UTF-16, locale-codepage, or byte-sensitive and you wan
 - `accessTokenSha256`
 - `updatedAt`
 
-If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, and `everything-b64`.
+If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, the WSL commands, and `everything-b64`.
 
 `public-with-token` is only valid when a token hash exists. The intended default is still `private-only`.
 
@@ -112,6 +120,7 @@ If you need to revert a host that was already switched to a PowerShell login she
 - On `X570`, `cmd.exe` is also outside the supported steady-state control path. Prefer direct native executables through `run-b64`.
 - `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.
 - `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
+- `wsl-b64` is normally reached through `win-remote wsl`, and `wsl-script-b64` is normally reached through `win-remote wsl-sh`.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `WindowsRemoteExecutor.cmd` is the stable launcher path; versioned native payloads can live under `C:\CodexRemote\tools\releases\...`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.

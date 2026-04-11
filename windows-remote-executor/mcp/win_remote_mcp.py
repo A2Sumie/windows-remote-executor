@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.6"
+SERVER_VERSION = "0.1.7"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 
@@ -156,6 +156,76 @@ def tool_specs() -> list[dict[str, Any]]:
                     "conda_prefix": {"type": "string"},
                 },
                 "required": ["target", "script_path"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl",
+            "description": "Run a Linux program through WSL with structured distro/user/cwd arguments.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "program": {"type": "string"},
+                    "args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                },
+                "required": ["target", "program"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl_capture",
+            "description": "Run a Linux program through WSL and return structured stdout/stderr capture.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "program": {"type": "string"},
+                    "args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                },
+                "required": ["target", "program"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl_script",
+            "description": "Run a shell script through WSL without composing bash -lc command strings.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "script": {"type": "string"},
+                    "script_args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                    "shell": {"type": "string"},
+                },
+                "required": ["target", "script"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl_script_capture",
+            "description": "Run a shell script through WSL and return structured stdout/stderr capture.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "script": {"type": "string"},
+                    "script_args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                    "shell": {"type": "string"},
+                },
+                "required": ["target", "script"],
                 "additionalProperties": False,
             },
         },
@@ -305,6 +375,68 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
                 argv.extend(script_args)
             result = run_win_remote(argv)
             return format_result(result)
+
+        if name == "win_wsl":
+            argv = ["wsl", require_str(arguments, "target")]
+            if distribution := optional_str(arguments, "distribution"):
+                argv.extend(["--distro", distribution])
+            if user := optional_str(arguments, "user"):
+                argv.extend(["--user", user])
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            argv.append(require_str(arguments, "program"))
+            argv.extend(optional_str_list(arguments, "args"))
+            result = run_win_remote(argv)
+            return format_result(result)
+
+        if name == "win_wsl_capture":
+            argv = ["wsl-capture", require_str(arguments, "target")]
+            if distribution := optional_str(arguments, "distribution"):
+                argv.extend(["--distro", distribution])
+            if user := optional_str(arguments, "user"):
+                argv.extend(["--user", user])
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            argv.append(require_str(arguments, "program"))
+            argv.extend(optional_str_list(arguments, "args"))
+            result = run_win_remote(argv)
+            return format_result(result, parse_stdout_json=True)
+
+        if name == "win_wsl_script":
+            argv = ["wsl-sh", require_str(arguments, "target")]
+            if distribution := optional_str(arguments, "distribution"):
+                argv.extend(["--distro", distribution])
+            if user := optional_str(arguments, "user"):
+                argv.extend(["--user", user])
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            if shell := optional_str(arguments, "shell"):
+                argv.extend(["--shell", shell])
+            argv.extend(["--stdin"])
+            script_args = optional_str_list(arguments, "script_args")
+            if script_args:
+                argv.append("--")
+                argv.extend(script_args)
+            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
+            return format_result(result)
+
+        if name == "win_wsl_script_capture":
+            argv = ["wsl-sh-capture", require_str(arguments, "target")]
+            if distribution := optional_str(arguments, "distribution"):
+                argv.extend(["--distro", distribution])
+            if user := optional_str(arguments, "user"):
+                argv.extend(["--user", user])
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            if shell := optional_str(arguments, "shell"):
+                argv.extend(["--shell", shell])
+            argv.extend(["--stdin"])
+            script_args = optional_str_list(arguments, "script_args")
+            if script_args:
+                argv.append("--")
+                argv.extend(script_args)
+            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
+            return format_result(result, parse_stdout_json=True)
 
         if name == "win_put":
             result = run_win_remote(

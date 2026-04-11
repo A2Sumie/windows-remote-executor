@@ -125,6 +125,10 @@ internal static class ExecutorAccessControl
             "capture-b64" => true,
             "python-b64" => true,
             "powershell-b64" => true,
+            "wsl-b64" => true,
+            "wsl-capture-b64" => true,
+            "wsl-script-b64" => true,
+            "wsl-script-capture-b64" => true,
             "everything-b64" => true,
             _ => false
         };
