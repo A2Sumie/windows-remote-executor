@@ -287,6 +287,155 @@ internal sealed class WslScriptOptions
     }
 }
 
+internal sealed class WslResidentOptions
+{
+    public string StagePath { get; init; } = string.Empty;
+    public string? LaunchPath { get; init; }
+    public string? WorkingDirectory { get; init; }
+    public string? Distribution { get; init; }
+    public string? User { get; init; }
+    public string ShellPath { get; init; } = "/bin/bash";
+    public string? PidFile { get; init; }
+    public string? LogFile { get; init; }
+    public int? Port { get; init; }
+    public string? HealthUrl { get; init; }
+    public int ReadyTimeoutSeconds { get; init; } = 20;
+    public int SettleDelaySeconds { get; init; } = 2;
+    public int PollIntervalMilliseconds { get; init; } = 500;
+    public int DiagnosticLines { get; init; } = 20;
+    public IReadOnlyList<string> ScriptArguments { get; init; } = Array.Empty<string>();
+
+    public static WslResidentOptions FromBase64Args(string[] args)
+    {
+        var stagePath = string.Empty;
+        string? launchPath = null;
+        string? workingDirectory = null;
+        string? distribution = null;
+        string? user = null;
+        var shellPath = "/bin/bash";
+        string? pidFile = null;
+        string? logFile = null;
+        int? port = null;
+        string? healthUrl = null;
+        var readyTimeoutSeconds = 20;
+        var settleDelaySeconds = 2;
+        var pollIntervalMilliseconds = 500;
+        var diagnosticLines = 20;
+        var scriptArgs = new List<string>();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--stage-path":
+                    stagePath = Base64Args.ReadValue(args, ref i, "--stage-path");
+                    break;
+                case "--launch-path":
+                    launchPath = Base64Args.ReadValue(args, ref i, "--launch-path");
+                    break;
+                case "--cwd":
+                    workingDirectory = Base64Args.ReadValue(args, ref i, "--cwd");
+                    break;
+                case "--distribution":
+                    distribution = Base64Args.ReadValue(args, ref i, "--distribution");
+                    break;
+                case "--user":
+                    user = Base64Args.ReadValue(args, ref i, "--user");
+                    break;
+                case "--shell":
+                    shellPath = Base64Args.ReadValue(args, ref i, "--shell");
+                    break;
+                case "--pid-file":
+                    pidFile = Base64Args.ReadValue(args, ref i, "--pid-file");
+                    break;
+                case "--log-file":
+                    logFile = Base64Args.ReadValue(args, ref i, "--log-file");
+                    break;
+                case "--port":
+                    port = ParsePositiveInt(Base64Args.ReadValue(args, ref i, "--port"), "--port");
+                    break;
+                case "--health-url":
+                    healthUrl = Base64Args.ReadValue(args, ref i, "--health-url");
+                    break;
+                case "--ready-timeout-seconds":
+                    readyTimeoutSeconds = ParseNonNegativeInt(
+                        Base64Args.ReadValue(args, ref i, "--ready-timeout-seconds"),
+                        "--ready-timeout-seconds");
+                    break;
+                case "--settle-delay-seconds":
+                    settleDelaySeconds = ParseNonNegativeInt(
+                        Base64Args.ReadValue(args, ref i, "--settle-delay-seconds"),
+                        "--settle-delay-seconds");
+                    break;
+                case "--poll-interval-ms":
+                    pollIntervalMilliseconds = ParsePositiveInt(
+                        Base64Args.ReadValue(args, ref i, "--poll-interval-ms"),
+                        "--poll-interval-ms");
+                    break;
+                case "--diagnostic-lines":
+                    diagnosticLines = ParsePositiveInt(
+                        Base64Args.ReadValue(args, ref i, "--diagnostic-lines"),
+                        "--diagnostic-lines");
+                    break;
+                case "--arg":
+                    scriptArgs.Add(Base64Args.ReadValue(args, ref i, "--arg"));
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown WSL resident option: {args[i]}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(stagePath))
+        {
+            throw new ArgumentException("--stage-path is required.");
+        }
+
+        if (string.IsNullOrWhiteSpace(shellPath))
+        {
+            throw new ArgumentException("--shell cannot be empty.");
+        }
+
+        return new WslResidentOptions
+        {
+            StagePath = stagePath,
+            LaunchPath = launchPath,
+            WorkingDirectory = workingDirectory,
+            Distribution = distribution,
+            User = user,
+            ShellPath = shellPath,
+            PidFile = pidFile,
+            LogFile = logFile,
+            Port = port,
+            HealthUrl = healthUrl,
+            ReadyTimeoutSeconds = readyTimeoutSeconds,
+            SettleDelaySeconds = settleDelaySeconds,
+            PollIntervalMilliseconds = pollIntervalMilliseconds,
+            DiagnosticLines = diagnosticLines,
+            ScriptArguments = scriptArgs
+        };
+    }
+
+    private static int ParseNonNegativeInt(string value, string option)
+    {
+        if (!int.TryParse(value, out var parsed) || parsed < 0)
+        {
+            throw new ArgumentException($"{option} must be a non-negative integer.");
+        }
+
+        return parsed;
+    }
+
+    private static int ParsePositiveInt(string value, string option)
+    {
+        if (!int.TryParse(value, out var parsed) || parsed <= 0)
+        {
+            throw new ArgumentException($"{option} must be a positive integer.");
+        }
+
+        return parsed;
+    }
+}
+
 internal static class ExecutionCommands
 {
     public static async Task<int> RunCommandAsync(string[] args)
@@ -385,6 +534,12 @@ internal static class ExecutionCommands
     {
         var options = WslScriptOptions.FromBase64Args(args);
         return await CaptureWslScriptInternalAsync(options);
+    }
+
+    public static async Task<int> RunWslResidentAsync(string[] args)
+    {
+        var options = WslResidentOptions.FromBase64Args(args);
+        return await CaptureWslResidentAsync(options);
     }
 
     private static RunProcessOptions ResolvePythonExecution(PythonScriptOptions options)
@@ -662,6 +817,13 @@ internal static class ExecutionCommands
 
     private static async Task<int> CaptureWslScriptInternalAsync(WslScriptOptions options)
     {
+        var result = await CaptureWslScriptResultAsync(options);
+        WriteCapturePayload(result);
+        return result.ExitCode;
+    }
+
+    private static async Task<ProcessResult> CaptureWslScriptResultAsync(WslScriptOptions options)
+    {
         var executable = ResolveWslExecutable();
         var tempWindowsPath = WriteTemporaryWslScript(options.ScriptBody);
 
@@ -674,18 +836,79 @@ internal static class ExecutionCommands
                 options.User,
                 options.ShellPath,
                 new[] { tempWslPath }.Concat(options.ScriptArguments).ToArray());
+            return await ProcessRunner.RunCaptureAsync(
+                executable,
+                arguments,
+                workingDirectory: null,
+                OutputEncodingPreference.Utf8);
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(tempWindowsPath);
+        }
+    }
+
+    private static async Task<int> CaptureWslResidentAsync(WslResidentOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var bootstrapScriptWindowsPath = WriteTemporaryWslScript(BuildWslResidentBootstrapScript());
+        var bootstrapScriptWslPath = TranslateWindowsPathToWsl(bootstrapScriptWindowsPath);
+        var launchPath = string.IsNullOrWhiteSpace(options.LaunchPath)
+            ? $"/tmp/windows-remote-executor-resident-{Guid.NewGuid():N}.sh"
+            : options.LaunchPath!;
+        var pidFile = string.IsNullOrWhiteSpace(options.PidFile)
+            ? $"/tmp/windows-remote-executor-resident-{Guid.NewGuid():N}.pid"
+            : options.PidFile!;
+        var logFile = string.IsNullOrWhiteSpace(options.LogFile)
+            ? $"/tmp/windows-remote-executor-resident-{Guid.NewGuid():N}.log"
+            : options.LogFile!;
+
+        try
+        {
+            var arguments = BuildWslArguments(
+                options.WorkingDirectory,
+                options.Distribution,
+                options.User,
+                "/bin/bash",
+                BuildWslResidentArguments(
+                    bootstrapScriptWslPath,
+                    options,
+                    launchPath,
+                    pidFile,
+                    logFile));
+
             var result = await ProcessRunner.RunCaptureAsync(
                 executable,
                 arguments,
                 workingDirectory: null,
                 OutputEncodingPreference.Utf8);
 
-            WriteCapturePayload(result);
+            var parsedResidentJson = TryNormalizeResidentJson(result.StdOut);
+            if (parsedResidentJson is not null)
+            {
+                Console.WriteLine(parsedResidentJson);
+            }
+            else
+            {
+                var payload = new
+                {
+                    status = result.ExitCode == 0 ? "ok" : "error",
+                    exitCode = result.ExitCode,
+                    stagePath = options.StagePath,
+                    launchPath,
+                    pidFile,
+                    logFile,
+                    stdoutText = result.StdOut,
+                    stderrText = result.StdErr
+                };
+                Console.WriteLine(JsonSerializer.Serialize(payload));
+            }
+
             return result.ExitCode;
         }
         finally
         {
-            TryDeleteTemporaryFile(tempWindowsPath);
+            TryDeleteTemporaryFile(bootstrapScriptWindowsPath);
         }
     }
 
@@ -740,6 +963,51 @@ internal static class ExecutionCommands
         commandLine.Add(program);
         commandLine.AddRange(arguments);
         return commandLine;
+    }
+
+    private static IReadOnlyList<string> BuildWslResidentArguments(
+        string bootstrapScriptWslPath,
+        WslResidentOptions options,
+        string launchPath,
+        string pidFile,
+        string logFile)
+    {
+        return new[]
+        {
+            bootstrapScriptWslPath,
+            options.StagePath,
+            launchPath,
+            options.ShellPath,
+            pidFile,
+            logFile,
+            options.Port?.ToString() ?? string.Empty,
+            options.HealthUrl ?? string.Empty,
+            options.ReadyTimeoutSeconds.ToString(),
+            options.SettleDelaySeconds.ToString(),
+            options.PollIntervalMilliseconds.ToString(),
+            options.DiagnosticLines.ToString()
+        }
+        .Concat(options.ScriptArguments)
+        .ToArray();
+    }
+
+    private static string? TryNormalizeResidentJson(string stdout)
+    {
+        var trimmed = stdout.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(trimmed);
+            return JsonSerializer.Serialize(document.RootElement);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string WriteTemporaryWslScript(string scriptBody)
@@ -808,6 +1076,240 @@ internal static class ExecutionCommands
                 "try { chcp 65001 > $null } catch {}",
                 body
             });
+    }
+
+    private static string BuildWslResidentBootstrapScript()
+    {
+        return
+            """
+            set -euo pipefail
+
+            src="$1"
+            dst="$2"
+            shell_path="$3"
+            pid_file="$4"
+            log_file="$5"
+            port="$6"
+            health_url="$7"
+            ready_timeout="$8"
+            settle_delay="$9"
+            poll_interval_ms="${10}"
+            diag_lines="${11}"
+            shift 11
+
+            mkdir -p "$(dirname "$dst")" "$(dirname "$pid_file")" "$(dirname "$log_file")"
+
+            cleanup() {
+              rm -f "$dst"
+            }
+
+            trap cleanup EXIT
+
+            cp "$src" "$dst"
+            chmod 700 "$dst"
+            touch "$log_file"
+            rm -f "$pid_file"
+
+            launch_method="setsid"
+            if command -v setsid >/dev/null 2>&1; then
+              setsid "$shell_path" "$dst" "$@" >>"$log_file" 2>&1 < /dev/null &
+            else
+              launch_method="nohup"
+              nohup "$shell_path" "$dst" "$@" >>"$log_file" 2>&1 < /dev/null &
+            fi
+            pid="$!"
+            printf '%s\n' "$pid" >"$pid_file"
+
+            poll_seconds="$(printf '%d.%03d' "$((poll_interval_ms / 1000))" "$((poll_interval_ms % 1000))")"
+
+            check_port() {
+              if [[ -z "$port" ]]; then
+                return 0
+              fi
+
+              if command -v ss >/dev/null 2>&1; then
+                ss -ltnH 2>/dev/null | awk '{print $4}' | grep -Eq "(^|[:])${port}$"
+                return $?
+              fi
+
+              return 1
+            }
+
+            check_health() {
+              if [[ -z "$health_url" ]]; then
+                return 0
+              fi
+
+              if command -v curl >/dev/null 2>&1; then
+                curl -fsS --max-time 2 "$health_url" >/dev/null
+                return $?
+              fi
+
+              if command -v wget >/dev/null 2>&1; then
+                wget -q -T 2 -O /dev/null "$health_url"
+                return $?
+              fi
+
+              if command -v python3 >/dev/null 2>&1; then
+                python3 - "$health_url" <<'PY'
+            import sys
+            import urllib.request
+
+            url = sys.argv[1]
+            with urllib.request.urlopen(url, timeout=2) as response:
+                if response.status >= 400:
+                    raise SystemExit(1)
+            PY
+                return $?
+              fi
+
+              return 1
+            }
+
+            if [[ "$settle_delay" != "0" ]]; then
+              sleep "$settle_delay"
+            fi
+
+            deadline="$(( $(date +%s) + ready_timeout ))"
+            pid_alive=0
+            port_ready=0
+            health_ready=0
+            ready=0
+
+            while true; do
+              if kill -0 "$pid" 2>/dev/null; then
+                pid_alive=1
+              else
+                pid_alive=0
+              fi
+
+              if check_port; then
+                port_ready=1
+              else
+                port_ready=0
+              fi
+
+              if check_health; then
+                health_ready=1
+              else
+                health_ready=0
+              fi
+
+              if [[ "$pid_alive" == "1" && "$port_ready" == "1" && "$health_ready" == "1" ]]; then
+                ready=1
+                break
+              fi
+
+              if [[ "$(date +%s)" -ge "$deadline" ]]; then
+                break
+              fi
+
+              sleep "$poll_seconds"
+            done
+
+            command_line=""
+            process_cwd=""
+            if kill -0 "$pid" 2>/dev/null; then
+              command_line="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+              process_cwd="$(readlink -f "/proc/${pid}/cwd" 2>/dev/null || true)"
+            fi
+
+            listener_snapshot=""
+            if [[ -n "$port" ]] && command -v ss >/dev/null 2>&1; then
+              listener_snapshot="$(ss -ltnp 2>/dev/null | awk -v port="${port}" '$4 ~ (":" port "$") { print }' | tail -n "$diag_lines" || true)"
+            fi
+
+            log_tail="$(tail -n "$diag_lines" "$log_file" 2>/dev/null || true)"
+            status="error"
+            exit_code=1
+            if [[ "$ready" == "1" ]]; then
+              status="ok"
+              exit_code=0
+            fi
+
+            if command -v python3 >/dev/null 2>&1; then
+              python3 - \
+                "$status" \
+                "$exit_code" \
+                "$launch_method" \
+                "$pid" \
+                "$pid_file" \
+                "$log_file" \
+                "$src" \
+                "$dst" \
+                "$port" \
+                "$health_url" \
+                "$ready_timeout" \
+                "$settle_delay" \
+                "$poll_interval_ms" \
+                "$diag_lines" \
+                "$pid_alive" \
+                "$port_ready" \
+                "$health_ready" \
+                "$command_line" \
+                "$process_cwd" \
+                "$listener_snapshot" \
+                "$log_tail" <<'PY'
+            import json
+            import sys
+
+            (
+                status,
+                exit_code,
+                launch_method,
+                pid,
+                pid_file,
+                log_file,
+                stage_path,
+                launch_path,
+                port,
+                health_url,
+                ready_timeout,
+                settle_delay,
+                poll_interval_ms,
+                diagnostic_lines,
+                pid_alive,
+                port_ready,
+                health_ready,
+                command_line,
+                process_cwd,
+                listener_snapshot,
+                log_tail,
+            ) = sys.argv[1:]
+
+            payload = {
+                "status": status,
+                "exitCode": int(exit_code),
+                "launchMethod": launch_method,
+                "pid": int(pid) if pid else None,
+                "pidFile": pid_file,
+                "logFile": log_file,
+                "stagePath": stage_path,
+                "launchPath": launch_path,
+                "port": int(port) if port else None,
+                "healthUrl": health_url or None,
+                "readyTimeoutSeconds": int(ready_timeout),
+                "settleDelaySeconds": int(settle_delay),
+                "pollIntervalMilliseconds": int(poll_interval_ms),
+                "diagnosticLines": int(diagnostic_lines),
+                "pidAlive": pid_alive == "1",
+                "portReady": port_ready == "1",
+                "healthReady": health_ready == "1",
+                "commandLine": command_line,
+                "workingDirectory": process_cwd,
+                "listenerSnapshot": listener_snapshot.splitlines(),
+                "logTail": log_tail.splitlines(),
+            }
+
+            print(json.dumps(payload, ensure_ascii=False))
+            PY
+            else
+              printf '{"status":"%s","exitCode":%s,"pid":%s,"pidFile":"%s","logFile":"%s"}\n' \
+                "$status" "$exit_code" "${pid:-null}" "$pid_file" "$log_file"
+            fi
+
+            exit "$exit_code"
+            """;
     }
 }
 

@@ -88,6 +88,10 @@ internal static class Program
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
                     return await ExecutionCommands.CaptureWslScriptAsync(commandArgs);
 
+                case "wsl-resident-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    return await ExecutionCommands.RunWslResidentAsync(commandArgs);
+
                 case "everything-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
                     return EverythingSearch.SearchToStdout(commandArgs);
@@ -134,6 +138,7 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe wsl-capture-b64 [options]
               WindowsRemoteExecutor.Native.exe wsl-script-b64 [options]
               WindowsRemoteExecutor.Native.exe wsl-script-capture-b64 [options]
+              WindowsRemoteExecutor.Native.exe wsl-resident-b64 [options]
               WindowsRemoteExecutor.Native.exe everything-b64 [options]
 
             bootstrap options:
@@ -208,6 +213,23 @@ internal static class Program
               --cwd <base64-utf8-linux-working-directory>
               --distribution <base64-utf8-distro-name>
               --user <base64-utf8-linux-user>
+              --arg <base64-utf8-script-argument>
+
+            wsl-resident-b64 options:
+              --stage-path <base64-utf8-staged-linux-path>
+              --launch-path <base64-utf8-linux-launch-path>
+              --shell <base64-utf8-linux-shell-path>
+              --cwd <base64-utf8-linux-working-directory>
+              --distribution <base64-utf8-distro-name>
+              --user <base64-utf8-linux-user>
+              --pid-file <base64-utf8-linux-pid-file>
+              --log-file <base64-utf8-linux-log-file>
+              --port <base64-utf8-port-number>
+              --health-url <base64-utf8-http-url>
+              --ready-timeout-seconds <base64-utf8-seconds>
+              --settle-delay-seconds <base64-utf8-seconds>
+              --poll-interval-ms <base64-utf8-milliseconds>
+              --diagnostic-lines <base64-utf8-count>
               --arg <base64-utf8-script-argument>
 
             everything-b64 options:

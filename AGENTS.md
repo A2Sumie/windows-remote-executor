@@ -24,8 +24,10 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 
 - Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
 - Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
-- Use `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, or MCP `win_wsl*` for Linux-side work inside WSL.
+- Use `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, `win-remote wsl-resident`, or MCP `win_wsl*` for Linux-side work inside WSL.
 - `win-remote wsl-sh` now stages local scripts through file transfer and executes them from WSL ext4 temp space, so it avoids Windows command-line length failures.
+- Use `--heartbeat-seconds` on long quiet foreground WSL commands before adding fake progress lines to the app itself.
+- Use `wsl-resident` when the goal is a durable WSL service and you want executor-side PID or port verification plus log diagnostics.
 - Use `win-remote capture` when output encoding is unknown, localized, UTF-16-shaped, or byte-sensitive and you need stable JSON plus raw base64 bytes.
 - Use `win-remote py` for Python scripts on the Windows host.
 - Use `win-remote put` and `win-remote get` for file transfer.
@@ -52,7 +54,7 @@ Treat raw PowerShell command lines as disallowed.
 - Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
 - Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
-- If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, or MCP `win_wsl_script` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
+- If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, `win-remote wsl-resident`, or MCP `win_wsl_script` / `win_wsl_resident` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
 - Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
 - Keep long-lived models, caches, and active code on WSL ext4 such as `/home/...`, not on `/mnt/*`.
 - When a WSL workload depends on a specific interpreter or GPU tool, prefer absolute paths such as `/home/.../.venv/bin/python` and `/usr/lib/wsl/lib/nvidia-smi`.

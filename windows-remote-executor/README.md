@@ -17,6 +17,7 @@ The intended steady state is:
 - runs remote Python scripts, including `conda run`
 - sends PowerShell as UTF-8 base64 and decodes it on Windows before launching PowerShell
 - ships a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
+- launches WSL resident services with verified PID or port readiness instead of leaving callers to guess between `tmux` and `nohup`
 - uploads and downloads files with `scp`
 - collects a JSON probe from the target host
 - deploys a directory through a remote staging area
@@ -134,11 +135,17 @@ Run Linux programs and shell scripts inside WSL without composing `wsl.exe ... b
 ```bash
 ./windows-remote-executor/bin/win-remote wsl winbox --cwd /tmp /usr/bin/whoami
 ./windows-remote-executor/bin/win-remote wsl-capture winbox --out ./wsl-uname.json /usr/bin/uname -a
+./windows-remote-executor/bin/win-remote wsl-capture winbox --heartbeat-seconds 10 /usr/bin/python3 -c 'import time; time.sleep(30); print("done")'
 ./windows-remote-executor/bin/win-remote wsl-sh winbox --cwd /tmp --file ./scripts/check-linux.sh -- --flag alpha
 cat ./scripts/check-linux.sh | ./windows-remote-executor/bin/win-remote wsl-sh winbox --stdin -- --flag alpha
+cat ./scripts/run-server.sh | ./windows-remote-executor/bin/win-remote wsl-resident winbox --cwd /home/sumie/app --log-file /home/sumie/app/logs/server.log --pid-file /home/sumie/app/run/server.pid --port 8023 --stdin
 ```
 
 `wsl-sh` now stages the script through `scp`, copies it into a Linux-native temp path such as `/tmp/...` inside WSL, and executes it there. That avoids Windows command-line length failures and avoids accidentally running the script body straight from `/mnt/c/...`.
+
+When a foreground WSL command is expected to stay quiet for a while, pass `--heartbeat-seconds <n>` so the executor emits lightweight stderr heartbeats instead of forcing each workspace to invent its own keepalive prints.
+
+For long-lived WSL services, prefer `wsl-resident` over repo-local `tmux` or `nohup` policy. It stages the script, copies it into WSL temp space, launches it in a detached session, and returns structured JSON with PID, readiness status, listener snapshot, and recent log lines.
 
 Capture localized or byte-sensitive output as JSON:
 
@@ -211,7 +218,8 @@ When `access-policy.json` contains an access token hash, native commands such as
 - `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.
-- Use `wsl`, `wsl-capture`, and `wsl-sh` for Linux-side work inside WSL. They avoid the common `wsl.exe ... bash -lc ...` and `/mnt/c/...` quoting failures.
+- Use `wsl`, `wsl-capture`, `wsl-sh`, and `wsl-resident` for Linux-side work inside WSL. They avoid the common `wsl.exe ... bash -lc ...` and `/mnt/c/...` quoting failures.
+- Use `--heartbeat-seconds` on long quiet foreground WSL commands before resorting to dummy app-layer logging.
 - `wsl.exe` under `run` is still fine for Windows-side WSL administration such as `--install`, `--set-default-version`, and `--shutdown`, but not for Linux-side workload launch.
 - Keep long-lived models, caches, virtualenvs, and hot code on the WSL ext4 filesystem such as `/home/...`, not under `/mnt/c` or `/mnt/d`, or load times will collapse.
 - If you update Windows-side files for a WSL workload, explicitly copy them into the WSL ext4 working tree before you trust the result. A changed `D:/...` tree does not automatically mean `/home/...` is updated.

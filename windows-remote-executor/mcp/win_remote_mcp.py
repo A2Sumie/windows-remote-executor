@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.8"
+SERVER_VERSION = "0.1.9"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 
@@ -171,6 +171,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "cwd": {"type": "string"},
                     "distribution": {"type": "string"},
                     "user": {"type": "string"},
+                    "heartbeat_seconds": {"type": "integer", "minimum": 1},
                 },
                 "required": ["target", "program"],
                 "additionalProperties": False,
@@ -188,6 +189,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "cwd": {"type": "string"},
                     "distribution": {"type": "string"},
                     "user": {"type": "string"},
+                    "heartbeat_seconds": {"type": "integer", "minimum": 1},
                 },
                 "required": ["target", "program"],
                 "additionalProperties": False,
@@ -206,6 +208,7 @@ def tool_specs() -> list[dict[str, Any]]:
                     "distribution": {"type": "string"},
                     "user": {"type": "string"},
                     "shell": {"type": "string"},
+                    "heartbeat_seconds": {"type": "integer", "minimum": 1},
                 },
                 "required": ["target", "script"],
                 "additionalProperties": False,
@@ -224,6 +227,33 @@ def tool_specs() -> list[dict[str, Any]]:
                     "distribution": {"type": "string"},
                     "user": {"type": "string"},
                     "shell": {"type": "string"},
+                    "heartbeat_seconds": {"type": "integer", "minimum": 1},
+                },
+                "required": ["target", "script"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl_resident",
+            "description": "Launch a WSL shell script as a verified resident process and return structured readiness diagnostics.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "script": {"type": "string"},
+                    "script_args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                    "shell": {"type": "string"},
+                    "pid_file": {"type": "string"},
+                    "log_file": {"type": "string"},
+                    "port": {"type": "integer", "minimum": 1},
+                    "health_url": {"type": "string"},
+                    "ready_timeout": {"type": "integer", "minimum": 1},
+                    "settle_delay": {"type": "integer", "minimum": 0},
+                    "poll_interval_ms": {"type": "integer", "minimum": 1},
+                    "diag_lines": {"type": "integer", "minimum": 1},
                 },
                 "required": ["target", "script"],
                 "additionalProperties": False,
@@ -384,6 +414,8 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
                 argv.extend(["--user", user])
             if cwd := optional_str(arguments, "cwd"):
                 argv.extend(["--cwd", cwd])
+            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
+                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
             argv.append(require_str(arguments, "program"))
             argv.extend(optional_str_list(arguments, "args"))
             result = run_win_remote(argv)
@@ -397,6 +429,8 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
                 argv.extend(["--user", user])
             if cwd := optional_str(arguments, "cwd"):
                 argv.extend(["--cwd", cwd])
+            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
+                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
             argv.append(require_str(arguments, "program"))
             argv.extend(optional_str_list(arguments, "args"))
             result = run_win_remote(argv)
@@ -412,6 +446,8 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
                 argv.extend(["--cwd", cwd])
             if shell := optional_str(arguments, "shell"):
                 argv.extend(["--shell", shell])
+            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
+                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
             argv.extend(["--stdin"])
             script_args = optional_str_list(arguments, "script_args")
             if script_args:
@@ -430,6 +466,42 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
                 argv.extend(["--cwd", cwd])
             if shell := optional_str(arguments, "shell"):
                 argv.extend(["--shell", shell])
+            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
+                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
+            argv.extend(["--stdin"])
+            script_args = optional_str_list(arguments, "script_args")
+            if script_args:
+                argv.append("--")
+                argv.extend(script_args)
+            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
+            return format_result(result, parse_stdout_json=True)
+
+        if name == "win_wsl_resident":
+            argv = ["wsl-resident", require_str(arguments, "target")]
+            if distribution := optional_str(arguments, "distribution"):
+                argv.extend(["--distro", distribution])
+            if user := optional_str(arguments, "user"):
+                argv.extend(["--user", user])
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            if shell := optional_str(arguments, "shell"):
+                argv.extend(["--shell", shell])
+            if pid_file := optional_str(arguments, "pid_file"):
+                argv.extend(["--pid-file", pid_file])
+            if log_file := optional_str(arguments, "log_file"):
+                argv.extend(["--log-file", log_file])
+            if port := optional_int(arguments, "port"):
+                argv.extend(["--port", str(port)])
+            if health_url := optional_str(arguments, "health_url"):
+                argv.extend(["--health-url", health_url])
+            if ready_timeout := optional_int(arguments, "ready_timeout"):
+                argv.extend(["--ready-timeout", str(ready_timeout)])
+            if settle_delay := optional_int(arguments, "settle_delay", allow_zero=True):
+                argv.extend(["--settle-delay", str(settle_delay)])
+            if poll_interval_ms := optional_int(arguments, "poll_interval_ms"):
+                argv.extend(["--poll-interval-ms", str(poll_interval_ms)])
+            if diag_lines := optional_int(arguments, "diag_lines"):
+                argv.extend(["--diag-lines", str(diag_lines)])
             argv.extend(["--stdin"])
             script_args = optional_str_list(arguments, "script_args")
             if script_args:
@@ -579,6 +651,20 @@ def optional_str_list(arguments: dict[str, Any], key: str) -> list[str]:
         return []
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError(f"'{key}' must be an array of strings when provided.")
+    return value
+
+
+def optional_int(arguments: dict[str, Any], key: str, allow_zero: bool = False) -> int | None:
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise ValueError(f"'{key}' must be an integer when provided.")
+    if allow_zero:
+        if value < 0:
+            raise ValueError(f"'{key}' must be zero or greater.")
+    elif value <= 0:
+        raise ValueError(f"'{key}' must be greater than zero.")
     return value
 
 

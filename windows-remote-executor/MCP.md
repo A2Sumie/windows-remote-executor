@@ -41,6 +41,7 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_wsl_capture`
 - `win_wsl_script`
 - `win_wsl_script_capture`
+- `win_wsl_resident`
 - `win_put`
 - `win_get`
 - `win_guard`
@@ -59,6 +60,8 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 
 - Prefer `win_wsl` and `win_wsl_script` over composing `wsl.exe ... bash -lc ...`.
 - `win_wsl_script` now goes through the wrapper's staged-file path, so it does not depend on expanding the whole script body into the Windows command line.
+- `win_wsl`, `win_wsl_capture`, `win_wsl_script`, and `win_wsl_script_capture` accept `heartbeat_seconds` for long quiet foreground work.
+- Prefer `win_wsl_resident` when the goal is a durable WSL-side service. It returns structured readiness diagnostics instead of only reporting that the launch command exited 0.
 - Keep long-lived models, caches, and WSL virtualenvs on ext4 paths such as `/home/...`; use `win_wsl` only to bridge into that Linux-native tree.
 
 ## Recommended client stance

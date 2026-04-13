@@ -11,14 +11,15 @@ Repository paths:
 - Windows native executor source: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
 
 Operating rules:
-1. Prefer `win-remote run`, `win-remote capture`, `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, `win-remote py`, `win-remote put`, `win-remote get`, `win-remote deploy`, `win-remote probe`, `win-remote policy`, `win-remote guard`, and `win-remote repair`.
+1. Prefer `win-remote run`, `win-remote capture`, `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, `win-remote wsl-resident`, `win-remote py`, `win-remote put`, `win-remote get`, `win-remote deploy`, `win-remote probe`, `win-remote policy`, `win-remote guard`, and `win-remote repair`.
 2. For routine agent use, prefer the structured MCP server instead of composing shell command lines.
 2. Treat PowerShell as a fallback. If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's UTF-8/base64 transport.
 3. Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
 4. On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
 5. If the result is process output and needs stable parsing, prefer `win-remote capture`, which returns JSON with detected encodings plus raw base64 stdout/stderr bytes.
 6. If the result is Windows state, prefer `win-remote exec --stdin` and emit JSON from Windows-local PowerShell instead of parsing localized CLI output over SSH.
-7. For WSL/Linux setup, prefer `win-remote wsl`, `wsl-capture`, or `wsl-sh --file/--stdin` instead of nesting `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths. `wsl-sh` stages scripts through file transfer, so it is the safe path for longer scripts too.
+7. For WSL/Linux setup, prefer `win-remote wsl`, `wsl-capture`, `wsl-sh --file/--stdin`, or `wsl-resident` instead of nesting `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths. `wsl-sh` stages scripts through file transfer, so it is the safe path for longer scripts too.
+8. For long quiet foreground WSL commands, add `--heartbeat-seconds <n>` before inventing app-level keepalive output. For durable services, prefer `wsl-resident` over repo-local `tmux` or `nohup`.
 8. Do not invoke the Windows native executor directly unless you have a specific reason. Let `win-remote` handle base64 transport and `--access-token`.
 9. Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
 10. Do not tunnel raw `powershell.exe` or `pwsh` through `win-remote run` or `win-remote capture`; those paths should fail closed by default.
@@ -51,5 +52,5 @@ Suggested release workflow:
 Use this shorter version when the agent context window is tight.
 
 ```md
-Use this repo's Windows Remote Executor. Prefer the MCP server for routine agent control and `win-remote` for manual debugging. PowerShell, if unavoidable, must go through the wrapper's UTF-8/base64 path, not `run` or `capture`. Keep hosts `private-only` by default. Do not remove access-token enforcement or `sshd` guardrails. Never commit real env files, tokens, host addresses, usernames, SSH keys, logs, or publish outputs. Prefer the framework-dependent `.NET 8` build when the Windows host already has `.NET 8`; otherwise use the self-contained publish. Validate changes with `probe`, `guard`, `repair`, and a minimal execution smoke test.
+Use this repo's Windows Remote Executor. Prefer the MCP server for routine agent control and `win-remote` for manual debugging. PowerShell, if unavoidable, must go through the wrapper's UTF-8/base64 path, not `run` or `capture`. Keep hosts `private-only` by default. Do not remove access-token enforcement or `sshd` guardrails. Never commit real env files, tokens, host addresses, usernames, SSH keys, logs, or publish outputs. Prefer the framework-dependent `.NET 8` build when the Windows host already has `.NET 8`; otherwise use the self-contained publish. Validate changes with `probe`, `guard`, `repair`, and a minimal execution smoke test. When validating resident WSL services, use `wsl-resident` so the executor proves the PID or port still exists after launch.
 ```

@@ -15,10 +15,11 @@ Usage:
   win-remote cmd <target> <cmd-code>
   win-remote run <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]
   win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
-  win-remote wsl <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] <program> [args...]
-  win-remote wsl-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] <program> [args...]
-  win-remote wsl-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
-  win-remote wsl-sh-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--heartbeat-seconds <n>] <program> [args...]
+  win-remote wsl-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] [--heartbeat-seconds <n>] <program> [args...]
+  win-remote wsl-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-sh-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-resident <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--pid-file <linux-path>] [--log-file <linux-path>] [--port <n>] [--health-url <url>] [--ready-timeout <seconds>] [--settle-delay <seconds>] [--poll-interval-ms <n>] [--diag-lines <n>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
   win-remote py <target> <remote-script-path> [--cwd <remote-dir>] [--python <remote-python>] [--conda-env <name> | --conda-prefix <prefix>] [-- <script-args...>]
   win-remote find <target> <query> [--max <count>]
   win-remote probe <target> [--out <local-json-file>]
@@ -367,8 +368,43 @@ generate_stage_id() {
   printf '%s-%s-%04x' "$(date +%Y%m%d-%H%M%S)" "$$" "$((RANDOM & 0xffff))"
 }
 
-render_wsl_stage_bootstrap() {
+validate_positive_integer() {
+  local value="$1"
+  local label="$2"
+  [[ "${value}" =~ ^[1-9][0-9]*$ ]] || die "${label} must be a positive integer"
+}
+
+render_wsl_heartbeat_wrapper() {
   cat <<'EOF'
+set -eu
+heartbeat_seconds="$1"
+program="$2"
+shift 2
+heartbeat_loop() {
+  local child_pid="$1"
+  local interval="$2"
+  while kill -0 "${child_pid}" 2>/dev/null; do
+    printf '[win-remote] heartbeat pid=%s utc=%s\n' "${child_pid}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+    sleep "${interval}"
+  done
+}
+"${program}" "$@" &
+child_pid="$!"
+heartbeat_loop "${child_pid}" "${heartbeat_seconds}" &
+heartbeat_pid="$!"
+wait "${child_pid}"
+status="$?"
+kill "${heartbeat_pid}" 2>/dev/null || true
+wait "${heartbeat_pid}" 2>/dev/null || true
+exit "${status}"
+EOF
+}
+
+render_wsl_stage_bootstrap() {
+  local heartbeat_seconds="${1:-0}"
+
+  if [[ "${heartbeat_seconds}" == "0" ]]; then
+    cat <<'EOF'
 set -eu
 src="$1"
 dst="$2"
@@ -381,6 +417,40 @@ trap cleanup EXIT
 cp "$src" "$dst"
 chmod 700 "$dst"
 "$shell_path" "$dst" "$@"
+EOF
+    return
+  fi
+
+  cat <<'EOF'
+set -eu
+src="$1"
+dst="$2"
+shell_path="$3"
+heartbeat_seconds="$4"
+shift 4
+cleanup() {
+  rm -f "$dst"
+}
+trap cleanup EXIT
+cp "$src" "$dst"
+chmod 700 "$dst"
+heartbeat_loop() {
+  local child_pid="$1"
+  local interval="$2"
+  while kill -0 "${child_pid}" 2>/dev/null; do
+    printf '[win-remote] heartbeat pid=%s utc=%s\n' "${child_pid}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+    sleep "${interval}"
+  done
+}
+"$shell_path" "$dst" "$@" &
+child_pid="$!"
+heartbeat_loop "${child_pid}" "${heartbeat_seconds}" &
+heartbeat_pid="$!"
+wait "${child_pid}"
+status="$?"
+kill "${heartbeat_pid}" 2>/dev/null || true
+wait "${heartbeat_pid}" 2>/dev/null || true
+exit "${status}"
 EOF
 }
 
@@ -607,6 +677,7 @@ cmd_wsl() {
   local distro=""
   local linux_user=""
   local cwd=""
+  local heartbeat_seconds=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --distro)
@@ -622,6 +693,12 @@ cmd_wsl() {
       --cwd)
         [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
         cwd="$2"
+        shift 2
+        ;;
+      --heartbeat-seconds)
+        [[ $# -ge 2 ]] || die "--heartbeat-seconds requires a positive integer"
+        validate_positive_integer "$2" "--heartbeat-seconds"
+        heartbeat_seconds="$2"
         shift 2
         ;;
       --)
@@ -643,6 +720,29 @@ cmd_wsl() {
   local program="$1"
   shift
 
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    local heartbeat_script
+    heartbeat_script="$(render_wsl_heartbeat_wrapper)"
+    local -a native_tokens=("wsl-script-b64" "--script" "$(encode_utf8_b64 "${heartbeat_script}")" "--shell" "$(encode_utf8_b64 "/bin/bash")")
+    if [[ -n "${cwd}" ]]; then
+      native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+    fi
+    if [[ -n "${distro}" ]]; then
+      native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+    fi
+    if [[ -n "${linux_user}" ]]; then
+      native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+    fi
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${heartbeat_seconds}")")
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${program}")")
+    local arg
+    for arg in "$@"; do
+      native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+    done
+    ssh_exec_native_tokens "${native_tokens[@]}"
+    return
+  fi
+
   local -a native_tokens=("wsl-b64" "--file" "$(encode_utf8_b64 "${program}")")
   if [[ -n "${cwd}" ]]; then
     native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
@@ -663,7 +763,7 @@ cmd_wsl() {
 }
 
 cmd_wsl_capture() {
-  [[ $# -ge 2 ]] || die "wsl-capture requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] <program> [args...]"
+  [[ $# -ge 2 ]] || die "wsl-capture requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] [--heartbeat-seconds <n>] <program> [args...]"
   local target="$1"
   shift
 
@@ -671,6 +771,7 @@ cmd_wsl_capture() {
   local linux_user=""
   local cwd=""
   local out_file=""
+  local heartbeat_seconds=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --distro)
@@ -693,6 +794,12 @@ cmd_wsl_capture() {
         out_file="$2"
         shift 2
         ;;
+      --heartbeat-seconds)
+        [[ $# -ge 2 ]] || die "--heartbeat-seconds requires a positive integer"
+        validate_positive_integer "$2" "--heartbeat-seconds"
+        heartbeat_seconds="$2"
+        shift 2
+        ;;
       --)
         shift
         break
@@ -711,6 +818,39 @@ cmd_wsl_capture() {
 
   local program="$1"
   shift
+
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    local heartbeat_script
+    heartbeat_script="$(render_wsl_heartbeat_wrapper)"
+    local -a native_tokens=("wsl-script-capture-b64" "--script" "$(encode_utf8_b64 "${heartbeat_script}")" "--shell" "$(encode_utf8_b64 "/bin/bash")")
+    if [[ -n "${cwd}" ]]; then
+      native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+    fi
+    if [[ -n "${distro}" ]]; then
+      native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+    fi
+    if [[ -n "${linux_user}" ]]; then
+      native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+    fi
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${heartbeat_seconds}")")
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${program}")")
+
+    local arg
+    for arg in "$@"; do
+      native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+    done
+
+    local capture_output=""
+    local capture_status=0
+    if capture_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+      capture_status=0
+    else
+      capture_status=$?
+    fi
+
+    print_capture_output "${capture_output}" "${out_file}"
+    return "${capture_status}"
+  fi
 
   local -a native_tokens=("wsl-capture-b64" "--file" "$(encode_utf8_b64 "${program}")")
   if [[ -n "${cwd}" ]]; then
@@ -741,7 +881,7 @@ cmd_wsl_capture() {
 }
 
 cmd_wsl_sh() {
-  [[ $# -ge 2 ]] || die "wsl-sh requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
+  [[ $# -ge 2 ]] || die "wsl-sh requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
   local target="$1"
   shift
 
@@ -749,6 +889,7 @@ cmd_wsl_sh() {
   local linux_user=""
   local cwd=""
   local shell_path=""
+  local heartbeat_seconds=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --distro)
@@ -769,6 +910,12 @@ cmd_wsl_sh() {
       --shell)
         [[ $# -ge 2 ]] || die "--shell requires a Linux shell path"
         shell_path="$2"
+        shift 2
+        ;;
+      --heartbeat-seconds)
+        [[ $# -ge 2 ]] || die "--heartbeat-seconds requires a positive integer"
+        validate_positive_integer "$2" "--heartbeat-seconds"
+        heartbeat_seconds="$2"
         shift 2
         ;;
       *)
@@ -835,7 +982,7 @@ cmd_wsl_sh() {
   stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
   local linux_temp_path="/tmp/windows-remote-executor-${stage_id}.sh"
   local bootstrap_script
-  bootstrap_script="$(render_wsl_stage_bootstrap)"
+  bootstrap_script="$(render_wsl_stage_bootstrap "${heartbeat_seconds}")"
 
   ensure_remote_dir "${remote_stage_dir}"
   scp_to_remote "${local_script_path}" "${remote_stage_path}"
@@ -853,6 +1000,9 @@ cmd_wsl_sh() {
   native_tokens+=("--arg" "$(encode_utf8_b64 "${stage_wsl_path}")")
   native_tokens+=("--arg" "$(encode_utf8_b64 "${linux_temp_path}")")
   native_tokens+=("--arg" "$(encode_utf8_b64 "${shell_path}")")
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${heartbeat_seconds}")")
+  fi
 
   if [[ ${#script_args[@]} -gt 0 ]]; then
     local arg
@@ -877,7 +1027,7 @@ cmd_wsl_sh() {
 }
 
 cmd_wsl_sh_capture() {
-  [[ $# -ge 2 ]] || die "wsl-sh-capture requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
+  [[ $# -ge 2 ]] || die "wsl-sh-capture requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
   local target="$1"
   shift
 
@@ -886,6 +1036,7 @@ cmd_wsl_sh_capture() {
   local cwd=""
   local shell_path=""
   local out_file=""
+  local heartbeat_seconds=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --distro)
@@ -911,6 +1062,12 @@ cmd_wsl_sh_capture() {
       --out)
         [[ $# -ge 2 ]] || die "--out requires a local file path"
         out_file="$2"
+        shift 2
+        ;;
+      --heartbeat-seconds)
+        [[ $# -ge 2 ]] || die "--heartbeat-seconds requires a positive integer"
+        validate_positive_integer "$2" "--heartbeat-seconds"
+        heartbeat_seconds="$2"
         shift 2
         ;;
       *)
@@ -977,7 +1134,7 @@ cmd_wsl_sh_capture() {
   stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
   local linux_temp_path="/tmp/windows-remote-executor-${stage_id}.sh"
   local bootstrap_script
-  bootstrap_script="$(render_wsl_stage_bootstrap)"
+  bootstrap_script="$(render_wsl_stage_bootstrap "${heartbeat_seconds}")"
 
   ensure_remote_dir "${remote_stage_dir}"
   scp_to_remote "${local_script_path}" "${remote_stage_path}"
@@ -995,6 +1152,213 @@ cmd_wsl_sh_capture() {
   native_tokens+=("--arg" "$(encode_utf8_b64 "${stage_wsl_path}")")
   native_tokens+=("--arg" "$(encode_utf8_b64 "${linux_temp_path}")")
   native_tokens+=("--arg" "$(encode_utf8_b64 "${shell_path}")")
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${heartbeat_seconds}")")
+  fi
+
+  if [[ ${#script_args[@]} -gt 0 ]]; then
+    local arg
+    for arg in "${script_args[@]}"; do
+      native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+    done
+  fi
+
+  local capture_output=""
+  local capture_status=0
+  if capture_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    capture_status=0
+  else
+    capture_status=$?
+  fi
+
+  if [[ ${cleanup_local_script} -eq 1 ]]; then
+    rm -f "${local_script_path}"
+  fi
+  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+
+  print_capture_output "${capture_output}" "${out_file}"
+  return "${capture_status}"
+}
+
+cmd_wsl_resident() {
+  [[ $# -ge 2 ]] || die "wsl-resident requires <target> [options] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  local shell_path=""
+  local pid_file=""
+  local log_file=""
+  local health_url=""
+  local port=""
+  local ready_timeout="20"
+  local settle_delay="2"
+  local poll_interval_ms="500"
+  local diag_lines="20"
+  local out_file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --shell)
+        [[ $# -ge 2 ]] || die "--shell requires a Linux shell path"
+        shell_path="$2"
+        shift 2
+        ;;
+      --pid-file)
+        [[ $# -ge 2 ]] || die "--pid-file requires a Linux path"
+        pid_file="$2"
+        shift 2
+        ;;
+      --log-file)
+        [[ $# -ge 2 ]] || die "--log-file requires a Linux path"
+        log_file="$2"
+        shift 2
+        ;;
+      --port)
+        [[ $# -ge 2 ]] || die "--port requires a positive integer"
+        validate_positive_integer "$2" "--port"
+        port="$2"
+        shift 2
+        ;;
+      --health-url)
+        [[ $# -ge 2 ]] || die "--health-url requires a URL"
+        health_url="$2"
+        shift 2
+        ;;
+      --ready-timeout)
+        [[ $# -ge 2 ]] || die "--ready-timeout requires a positive integer"
+        validate_positive_integer "$2" "--ready-timeout"
+        ready_timeout="$2"
+        shift 2
+        ;;
+      --settle-delay)
+        [[ $# -ge 2 ]] || die "--settle-delay requires a non-negative integer"
+        [[ "$2" =~ ^[0-9]+$ ]] || die "--settle-delay must be a non-negative integer"
+        settle_delay="$2"
+        shift 2
+        ;;
+      --poll-interval-ms)
+        [[ $# -ge 2 ]] || die "--poll-interval-ms requires a positive integer"
+        validate_positive_integer "$2" "--poll-interval-ms"
+        poll_interval_ms="$2"
+        shift 2
+        ;;
+      --diag-lines)
+        [[ $# -ge 2 ]] || die "--diag-lines requires a positive integer"
+        validate_positive_integer "$2" "--diag-lines"
+        diag_lines="$2"
+        shift 2
+        ;;
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a local file path"
+        out_file="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+  [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
+
+  local source_mode="${1:-}"
+  local local_script_path=""
+  local cleanup_local_script=0
+  local -a script_args=()
+  case "${source_mode}" in
+    --file)
+      [[ $# -ge 2 ]] || die "wsl-resident --file requires a local file path"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      local_script_path="$2"
+      shift 2
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      ;;
+    --stdin)
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
+      shift
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      cat >"${local_script_path}"
+      ;;
+    *)
+      local -a inline_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --)
+            shift
+            break
+            ;;
+          *)
+            inline_parts+=("$1")
+            shift
+            ;;
+        esac
+      done
+      [[ ${#inline_parts[@]} -gt 0 ]] || die "wsl-resident requires inline shell, --file <local-sh>, or --stdin"
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
+      printf '%s' "${inline_parts[*]}" >"${local_script_path}"
+      ;;
+  esac
+  script_args=("$@")
+
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/wsl-script-${stage_id}"
+  local remote_stage_path="${remote_stage_dir}/payload.sh"
+  local stage_wsl_path
+  stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
+  local launch_path="/tmp/windows-remote-executor-${stage_id}.sh"
+
+  ensure_remote_dir "${remote_stage_dir}"
+  scp_to_remote "${local_script_path}" "${remote_stage_path}"
+
+  local -a native_tokens=("wsl-resident-b64" "--stage-path" "$(encode_utf8_b64 "${stage_wsl_path}")" "--launch-path" "$(encode_utf8_b64 "${launch_path}")" "--shell" "$(encode_utf8_b64 "${shell_path}")" "--ready-timeout-seconds" "$(encode_utf8_b64 "${ready_timeout}")" "--settle-delay-seconds" "$(encode_utf8_b64 "${settle_delay}")" "--poll-interval-ms" "$(encode_utf8_b64 "${poll_interval_ms}")" "--diagnostic-lines" "$(encode_utf8_b64 "${diag_lines}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+  if [[ -n "${pid_file}" ]]; then
+    native_tokens+=("--pid-file" "$(encode_utf8_b64 "${pid_file}")")
+  fi
+  if [[ -n "${log_file}" ]]; then
+    native_tokens+=("--log-file" "$(encode_utf8_b64 "${log_file}")")
+  fi
+  if [[ -n "${port}" ]]; then
+    native_tokens+=("--port" "$(encode_utf8_b64 "${port}")")
+  fi
+  if [[ -n "${health_url}" ]]; then
+    native_tokens+=("--health-url" "$(encode_utf8_b64 "${health_url}")")
+  fi
 
   if [[ ${#script_args[@]} -gt 0 ]]; then
     local arg
@@ -1942,6 +2306,9 @@ main() {
       ;;
     wsl-sh-capture)
       cmd_wsl_sh_capture "$@"
+      ;;
+    wsl-resident)
+      cmd_wsl_resident "$@"
       ;;
     py)
       cmd_py "$@"

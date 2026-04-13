@@ -129,6 +129,7 @@ internal static class ExecutorAccessControl
             "wsl-capture-b64" => true,
             "wsl-script-b64" => true,
             "wsl-script-capture-b64" => true,
+            "wsl-resident-b64" => true,
             "everything-b64" => true,
             _ => false
         };
