@@ -6,19 +6,21 @@ If you are an agentic tool operating from this repository, use this file as the 
 
 Use this repository to operate a Windows host from macOS or Linux through the provided executor.
 
+- Primary control plane: C# native executor through `windows-remote-executor/mcp/win_remote_mcp.py`
 - Local wrapper: `windows-remote-executor/bin/win-remote`
 - Structured MCP server: `windows-remote-executor/mcp/win_remote_mcp.py`
 - Windows native executor: `windows-remote-executor-native`
 - Default stance: SSH on a private address, access policy enabled, PowerShell minimized
+- Stability boundary: do not hand-compose Windows command lines when structured argv/base64 native transport can express the operation.
 
 ## First Steps
 
 1. Read `windows-remote-executor/README.md`.
 2. Locate the real target env file outside git-tracked defaults.
 3. Start with `./windows-remote-executor/bin/win-remote probe <target>`.
-4. For routine agent use, prefer the MCP server over shell-authored command strings.
-4. If the task touches host exposure or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
-5. Only then perform file transfer, process execution, deploys, or tool updates.
+4. For routine agent use, use the MCP server over shell-authored command strings.
+5. If the task touches host exposure or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
+6. Only then perform file transfer, process execution, deploys, or tool updates.
 
 ## Command Choice
 
@@ -33,6 +35,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote put` and `win-remote get` for file transfer.
 - Use `win-remote deploy` for staged directory updates.
 - Use `win-remote update-tools` to publish a new Windows-side executor release without overwriting an in-use `.exe`.
+- If existing tools cannot represent a workflow, add a C# native subcommand or MCP tool before inventing another shell quoting convention.
 - Use `win-remote policy` to install or rotate `access-policy.json`.
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
 - Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.

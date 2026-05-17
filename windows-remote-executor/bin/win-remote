@@ -459,7 +459,21 @@ cleanup_remote_dir_best_effort() {
   remote_dir="$(normalize_remote_path "$1")"
   local remote_dir_cmd
   remote_dir_cmd="$(remote_cmd_path "${remote_dir}")"
-  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist ${remote_dir_cmd} rmdir /s /q ${remote_dir_cmd}\"" >/dev/null 2>&1 || true
+  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist \"${remote_dir_cmd}\" rmdir /s /q \"${remote_dir_cmd}\"\"" >/dev/null 2>&1 || true
+}
+
+cleanup_wsl_stage_best_effort() {
+  local cleanup_local_script="$1"
+  local local_script_path="$2"
+  local remote_stage_dir="${3:-}"
+
+  if [[ "${cleanup_local_script}" == "1" && -n "${local_script_path}" ]]; then
+    rm -f "${local_script_path}" || true
+  fi
+
+  if [[ -n "${remote_stage_dir}" ]]; then
+    cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  fi
 }
 
 render_native_launcher() {
@@ -984,8 +998,21 @@ cmd_wsl_sh() {
   local bootstrap_script
   bootstrap_script="$(render_wsl_stage_bootstrap "${heartbeat_seconds}")"
 
-  ensure_remote_dir "${remote_stage_dir}"
-  scp_to_remote "${local_script_path}" "${remote_stage_path}"
+  local setup_status=0
+  if ensure_remote_dir "${remote_stage_dir}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+  if scp_to_remote "${local_script_path}" "${remote_stage_path}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
 
   local -a native_tokens=("wsl-script-b64" "--script" "$(encode_utf8_b64 "${bootstrap_script}")" "--shell" "$(encode_utf8_b64 "/bin/sh")")
   if [[ -n "${cwd}" ]]; then
@@ -1018,10 +1045,7 @@ cmd_wsl_sh() {
     run_status=$?
   fi
 
-  if [[ ${cleanup_local_script} -eq 1 ]]; then
-    rm -f "${local_script_path}"
-  fi
-  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
 
   return "${run_status}"
 }
@@ -1136,8 +1160,21 @@ cmd_wsl_sh_capture() {
   local bootstrap_script
   bootstrap_script="$(render_wsl_stage_bootstrap "${heartbeat_seconds}")"
 
-  ensure_remote_dir "${remote_stage_dir}"
-  scp_to_remote "${local_script_path}" "${remote_stage_path}"
+  local setup_status=0
+  if ensure_remote_dir "${remote_stage_dir}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+  if scp_to_remote "${local_script_path}" "${remote_stage_path}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
 
   local -a native_tokens=("wsl-script-capture-b64" "--script" "$(encode_utf8_b64 "${bootstrap_script}")" "--shell" "$(encode_utf8_b64 "/bin/sh")")
   if [[ -n "${cwd}" ]]; then
@@ -1171,10 +1208,7 @@ cmd_wsl_sh_capture() {
     capture_status=$?
   fi
 
-  if [[ ${cleanup_local_script} -eq 1 ]]; then
-    rm -f "${local_script_path}"
-  fi
-  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
 
   print_capture_output "${capture_output}" "${out_file}"
   return "${capture_status}"
@@ -1334,8 +1368,21 @@ cmd_wsl_resident() {
   stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
   local launch_path="/tmp/windows-remote-executor-${stage_id}.sh"
 
-  ensure_remote_dir "${remote_stage_dir}"
-  scp_to_remote "${local_script_path}" "${remote_stage_path}"
+  local setup_status=0
+  if ensure_remote_dir "${remote_stage_dir}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+  if scp_to_remote "${local_script_path}" "${remote_stage_path}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
 
   local -a native_tokens=("wsl-resident-b64" "--stage-path" "$(encode_utf8_b64 "${stage_wsl_path}")" "--launch-path" "$(encode_utf8_b64 "${launch_path}")" "--shell" "$(encode_utf8_b64 "${shell_path}")" "--ready-timeout-seconds" "$(encode_utf8_b64 "${ready_timeout}")" "--settle-delay-seconds" "$(encode_utf8_b64 "${settle_delay}")" "--poll-interval-ms" "$(encode_utf8_b64 "${poll_interval_ms}")" "--diagnostic-lines" "$(encode_utf8_b64 "${diag_lines}")")
   if [[ -n "${cwd}" ]]; then
@@ -1375,10 +1422,7 @@ cmd_wsl_resident() {
     capture_status=$?
   fi
 
-  if [[ ${cleanup_local_script} -eq 1 ]]; then
-    rm -f "${local_script_path}"
-  fi
-  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
 
   print_capture_output "${capture_output}" "${out_file}"
   return "${capture_status}"

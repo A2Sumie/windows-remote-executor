@@ -75,7 +75,7 @@ internal static class ProcessRunner
             StartInfo = startInfo
         };
 
-        process.Start();
+        StartAndCloseInput(process);
         var stdoutTask = PumpAsync(process.StandardOutput.BaseStream, Console.Out, outputPreference);
         var stderrTask = PumpAsync(process.StandardError.BaseStream, Console.Error, outputPreference);
         await Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
@@ -112,6 +112,7 @@ internal static class ProcessRunner
         var startInfo = new ProcessStartInfo
         {
             FileName = fileName,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -255,12 +256,12 @@ internal static class ProcessRunner
         bool throwOnFailure,
         OutputEncodingPreference outputPreference)
     {
-        process.Start();
+        StartAndCloseInput(process);
         var stdoutTask = ReadBytesAsync(process.StandardOutput.BaseStream);
         var stderrTask = ReadBytesAsync(process.StandardError.BaseStream);
-        await process.WaitForExitAsync();
-        var stdoutBytes = await stdoutTask;
-        var stderrBytes = await stderrTask;
+        await Task.WhenAll(stdoutTask, stderrTask, process.WaitForExitAsync());
+        var stdoutBytes = stdoutTask.Result;
+        var stderrBytes = stderrTask.Result;
         var decodedStdOut = OutputDecoding.Decode(stdoutBytes, outputPreference);
         var decodedStdErr = OutputDecoding.Decode(stderrBytes, outputPreference);
 
@@ -289,6 +290,12 @@ internal static class ProcessRunner
         using var buffer = new MemoryStream();
         await input.CopyToAsync(buffer);
         return buffer.ToArray();
+    }
+
+    private static void StartAndCloseInput(Process process)
+    {
+        process.Start();
+        process.StandardInput.Close();
     }
 
     private static string QuoteForDisplay(string argument)

@@ -8,7 +8,7 @@ windows-remote-executor/mcp/win_remote_mcp.py
 
 ## Why this exists
 
-The long-term quoting fix is to stop asking the model to compose shell and PowerShell command lines in the first place.
+The quoting fix is to stop asking the model to compose shell, `cmd.exe`, PowerShell, or `wsl.exe ... bash -lc ...` command lines in the first place.
 
 With MCP, the client sends structured JSON arguments such as:
 
@@ -23,7 +23,7 @@ That means the model calls a tool like `win_run` instead of generating:
 ./windows-remote-executor/bin/win-remote run X570 ...
 ```
 
-This removes most day-to-day quoting drift from the model layer.
+This removes day-to-day quoting drift from the model layer. The C# native executor owns process launch and structured argv handling; MCP owns JSON-shaped tool calls; the shell wrapper is only a compatibility and staging layer.
 
 ## Run
 
@@ -64,6 +64,8 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - Prefer `win_wsl_resident` when the goal is a durable WSL-side service. It returns structured readiness diagnostics instead of only reporting that the launch command exited 0.
 - Keep long-lived models, caches, and WSL virtualenvs on ext4 paths such as `/home/...`; use `win_wsl` only to bridge into that Linux-native tree.
 
-## Recommended client stance
+## Required client stance
 
-For agent clients, prefer this MCP server over shelling out to `win-remote` directly. Shell remains useful for manual debugging, but MCP should be the default control plane for routine automation.
+For agent clients, use this MCP server over shelling out to `win-remote` directly whenever the tool is available. Shell remains useful for manual debugging, deployment, and compatibility, but MCP should be the default control plane for routine automation.
+
+When a workflow cannot be represented by the existing MCP tools, add a native/MCP capability instead of teaching agents another quoting pattern. The purpose of this executor is to make spaces, quotes, Unicode, long scripts, and WSL arguments reliable by construction.

@@ -2,11 +2,14 @@
 
 This toolkit lets a macOS or Linux shell drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and a PowerShell fallback that does not depend on fragile local quoting.
 
-For agentic clients, the preferred entrypoint is now the structured MCP server in `MCP.md`, not ad hoc shell command generation.
+For agentic clients, the primary entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not use ad hoc shell command generation as the normal control plane. The shell wrapper exists to resolve targets, stage files, and invoke the native executable; the native executable owns structured argv, base64 payloads, process launch, output capture, WSL bridging, and SSH safety checks.
+
+This is a hard stability boundary: if a task can be expressed as argv, script body, file upload/download, WSL program, scheduled-task query, or PowerShell file/stdin, use the native/MCP path. Avoid raw `cmd.exe`, raw `powershell.exe`, `wsl.exe ... bash -lc ...`, or hand-built Windows command strings in agent work.
 
 The intended steady state is:
 
-- direct native process launch, `scp`, and a native Windows executor for routine work
+- direct native process launch, `scp`, and a native C# Windows executor for routine work
+- structured argv/base64 transport instead of quote-sensitive command strings
 - PowerShell only when the task is specifically PowerShell-shaped, and only through the wrapper's UTF-8/base64 path
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
@@ -110,7 +113,7 @@ Probe the remote host:
 ./windows-remote-executor/bin/win-remote probe winbox --out ./probe-winbox.json
 ```
 
-For agent clients, prefer the MCP server so the model calls structured tools instead of authoring shell:
+For agent clients, use the MCP server so the model calls structured tools instead of authoring shell:
 
 ```bash
 python3 ./windows-remote-executor/mcp/win_remote_mcp.py
@@ -215,6 +218,7 @@ When `access-policy.json` contains an access token hash, native commands such as
 ## Notes
 
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
+- For new automation, prefer adding a native subcommand or MCP tool over adding another shell quoting convention. The goal is to make spaces, quotes, non-ASCII text, long scripts, and WSL arguments boring.
 - `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.

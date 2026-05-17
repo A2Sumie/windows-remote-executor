@@ -2,8 +2,8 @@
 
 Read `AGENTS.md` first.
 
-Use `windows-remote-executor/bin/win-remote` as the primary interface for Windows work from this repository.
-For routine agent use, prefer the structured MCP server in `windows-remote-executor/mcp/win_remote_mcp.py`.
+Use the C# native executor through the structured MCP server in `windows-remote-executor/mcp/win_remote_mcp.py` as the primary interface for routine Windows work from this repository.
+Use `windows-remote-executor/bin/win-remote` for manual debugging, deployment, and compatibility.
 
 ## First Commands
 
@@ -15,6 +15,8 @@ For routine agent use, prefer the structured MCP server in `windows-remote-execu
 ## Rules
 
 - Prefer `run`, `capture`, `wsl`, `wsl-capture`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
+- Do not hand-compose Windows command lines when the native/MCP path can carry structured argv or a base64 script body.
+- If a workflow needs new coverage, add a native subcommand or MCP tool instead of adding another quoting convention.
 - Use `run` for `dism.exe` and other Windows-native platform tools instead of wrapping them in PowerShell.
 - Use `wsl`, `wsl-capture`, or `wsl-sh` for Linux-side execution inside WSL.
 - `wsl-sh` now stages scripts through file transfer and runs them from a Linux temp path, so `--file` and `--stdin` are safe for longer scripts.
