@@ -8,12 +8,14 @@ internal sealed class AccessPolicy
 {
     public string ExpectedListenAddress { get; init; } = string.Empty;
     public string ExposureMode { get; init; } = "private-only";
+    public string CommandMode { get; init; } = "standard";
     public string Label { get; init; } = "PRIVATE-ONLY";
     public string? AccessTokenSha256 { get; init; }
     public string? UpdatedAt { get; init; }
 
     public bool AccessTokenRequired => !string.IsNullOrWhiteSpace(AccessTokenSha256);
     public bool AllowsPublicExposure => ExposureMode.Equals("public-with-token", StringComparison.OrdinalIgnoreCase);
+    public bool EnforcesArgvOnly => CommandMode.Equals("argv-only", StringComparison.OrdinalIgnoreCase);
 
     public bool MatchesToken(string? providedToken)
     {
@@ -97,14 +99,20 @@ internal static class ExecutorAccessControl
         };
     }
 
-    public static void EnsureCommandAllowed(string command, string? accessToken)
+    public static void EnsureCommandAllowed(string command, string? accessToken, string[] commandArgs)
     {
+        var policy = AccessPolicy.TryLoadDefault();
+
         if (!CommandRequiresTokenCheck(command))
         {
             return;
         }
 
-        var policy = AccessPolicy.TryLoadDefault();
+        if (policy is not null)
+        {
+            EnsureCommandModeAllowed(policy, command, commandArgs);
+        }
+
         if (policy is null || !policy.AccessTokenRequired)
         {
             return;
@@ -131,6 +139,100 @@ internal static class ExecutorAccessControl
             "wsl-script-capture-b64" => true,
             "wsl-resident-b64" => true,
             "everything-b64" => true,
+            _ => false
+        };
+    }
+
+    private static void EnsureCommandModeAllowed(AccessPolicy policy, string command, string[] commandArgs)
+    {
+        if (!policy.EnforcesArgvOnly)
+        {
+            return;
+        }
+
+        switch (command)
+        {
+            case "run-b64":
+            case "capture-b64":
+                EnsureProgramAllowedForArgvOnly(command, commandArgs);
+                return;
+
+            case "probe":
+            case "guard-sshd":
+            case "repair-sshd":
+            case "everything-b64":
+                return;
+
+            case "python-b64":
+            case "powershell-b64":
+            case "wsl-b64":
+            case "wsl-capture-b64":
+            case "wsl-script-b64":
+            case "wsl-script-capture-b64":
+            case "wsl-resident-b64":
+                throw new UnauthorizedAccessException(
+                    $"Command '{command}' is blocked by access-policy commandMode=argv-only. Use run-b64/capture-b64 with an allowed executable and explicit argv.");
+
+            default:
+                return;
+        }
+    }
+
+    private static void EnsureProgramAllowedForArgvOnly(string command, string[] commandArgs)
+    {
+        var filePath = TryReadBase64Option(commandArgs, "--file");
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new ArgumentException("--file is required.");
+        }
+
+        var executableName = Path.GetFileName(filePath.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(executableName))
+        {
+            executableName = filePath;
+        }
+
+        if (IsBlockedInterpreterOrShell(executableName))
+        {
+            throw new UnauthorizedAccessException(
+                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for '{command}'. Shell, PowerShell, Python, and WSL interpreters are not allowed.");
+        }
+    }
+
+    private static string? TryReadBase64Option(string[] args, string option)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] != option)
+            {
+                continue;
+            }
+
+            if (i + 1 >= args.Length)
+            {
+                throw new ArgumentException($"{option} requires a base64 value.");
+            }
+
+            return Base64Args.Decode(args[i + 1]);
+        }
+
+        return null;
+    }
+
+    private static bool IsBlockedInterpreterOrShell(string executableName)
+    {
+        var normalized = executableName.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "cmd" or "cmd.exe" => true,
+            "powershell" or "powershell.exe" => true,
+            "pwsh" or "pwsh.exe" => true,
+            "py" or "py.exe" => true,
+            "python" or "python.exe" => true,
+            "python3" or "python3.exe" => true,
+            "wsl" or "wsl.exe" => true,
+            "bash" or "bash.exe" => true,
+            "sh" or "sh.exe" => true,
             _ => false
         };
     }

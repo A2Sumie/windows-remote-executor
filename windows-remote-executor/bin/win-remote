@@ -26,7 +26,7 @@ Usage:
   win-remote guard <target> [--out <local-json-file>] [--no-disable] [--expected-listen-address <ip>]
   win-remote repair <target> [--out <local-json-file>] [--expected-listen-address <ip>] [--force-rewrite]
   win-remote tasks <target> [--task-name <name>]... [--prefix <text>] [--out <local-json-file>]
-  win-remote policy <target> [--mode <private-only|public-with-token>] [--expected-listen-address <ip>] [--label <text>] [--token <plain-token> | --rotate-token] [--skip-guard-install] [--no-run-guard]
+  win-remote policy <target> [--mode <private-only|public-with-token>] [--command-mode <standard|argv-only>] [--expected-listen-address <ip>] [--label <text>] [--token <plain-token> | --rotate-token] [--skip-guard-install] [--no-run-guard]
   win-remote update-tools <target> [--native-dir <local-dir> | --native-exe <local-exe>] [--everything-dll <local-dll>] [--es-exe <local-es>] [--policy-file <local-json>] [--install-guard]
   win-remote put <target> <local-path> <remote-path>
   win-remote get <target> <remote-path> <local-path>
@@ -154,8 +154,9 @@ write_policy_file() {
   local output_path="$1"
   local expected_listen_address="$2"
   local exposure_mode="$3"
-  local label="$4"
-  local access_token="$5"
+  local command_mode="$4"
+  local label="$5"
+  local access_token="$6"
   local access_token_sha256=""
   local access_token_json="null"
 
@@ -168,6 +169,7 @@ write_policy_file() {
 {
   "expectedListenAddress": "$(json_escape "${expected_listen_address}")",
   "exposureMode": "$(json_escape "${exposure_mode}")",
+  "commandMode": "$(json_escape "${command_mode}")",
   "label": "$(json_escape "${label}")",
   "accessTokenSha256": ${access_token_json},
   "updatedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -284,6 +286,13 @@ guard_raw_powershell_program() {
   fi
 }
 
+guard_argv_only_route() {
+  local route="$1"
+  if [[ "${TARGET_COMMAND_MODE}" == "argv-only" ]]; then
+    die "${route} is blocked because TARGET_COMMAND_MODE=argv-only. Use win-remote run/capture with a concrete native executable and explicit argv."
+  fi
+}
+
 print_ok() {
   printf 'OK\n'
 }
@@ -321,6 +330,7 @@ build_native_invoke_body() {
   for token in "$@"; do
     code+=" $(cmd_quote "${token}")"
   done
+  code+=" & if errorlevel 1 exit /b 1"
   printf '%s' "${code}"
 }
 
@@ -487,11 +497,13 @@ set "WINDOWS_REMOTE_EXECUTOR_PRIMARY=$(remote_cmd_path "${primary_path}")"
 set "WINDOWS_REMOTE_EXECUTOR_FALLBACK=$(remote_cmd_path "${fallback_path}")"
 if exist "%WINDOWS_REMOTE_EXECUTOR_PRIMARY%" (
   "%WINDOWS_REMOTE_EXECUTOR_PRIMARY%" %*
-  exit /b %ERRORLEVEL%
+  if errorlevel 1 exit /b 1
+  exit /b 0
 )
 if exist "%WINDOWS_REMOTE_EXECUTOR_FALLBACK%" (
   "%WINDOWS_REMOTE_EXECUTOR_FALLBACK%" %*
-  exit /b %ERRORLEVEL%
+  if errorlevel 1 exit /b 1
+  exit /b 0
 )
 echo error: WindowsRemoteExecutor native payload not found. 1>&2
 exit /b 127
@@ -538,6 +550,7 @@ scp_from_remote() {
 cmd_exec() {
   [[ $# -ge 2 ]] || die "exec requires <target> plus inline PowerShell, --file <local-ps1>, or --stdin"
   load_target "$1"
+  guard_argv_only_route "exec"
   shift
   local code
   code="$(read_text_source "exec" "$@")"
@@ -547,6 +560,7 @@ cmd_exec() {
 cmd_cmd() {
   [[ $# -ge 2 ]] || die "cmd requires <target> <cmd-code>"
   load_target "$1"
+  guard_argv_only_route "cmd"
   shift
   ssh_exec_cmd "$*"
 }
@@ -728,6 +742,7 @@ cmd_wsl() {
   [[ $# -ge 1 ]] || die "wsl requires a Linux program path"
 
   load_target "${target}"
+  guard_argv_only_route "wsl"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
 
@@ -827,6 +842,7 @@ cmd_wsl_capture() {
   [[ $# -ge 1 ]] || die "wsl-capture requires a Linux program path"
 
   load_target "${target}"
+  guard_argv_only_route "wsl-capture"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
 
@@ -939,6 +955,7 @@ cmd_wsl_sh() {
   done
 
   load_target "${target}"
+  guard_argv_only_route "wsl-sh"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
@@ -1101,6 +1118,7 @@ cmd_wsl_sh_capture() {
   done
 
   load_target "${target}"
+  guard_argv_only_route "wsl-sh-capture"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
@@ -1311,6 +1329,7 @@ cmd_wsl_resident() {
   done
 
   load_target "${target}"
+  guard_argv_only_route "wsl-resident"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
@@ -1475,6 +1494,7 @@ cmd_py() {
   done
 
   load_target "${target}"
+  guard_argv_only_route "py"
 
   local -a native_tokens=("python-b64" "--script" "$(encode_utf8_b64 "${script_path}")")
   if [[ -n "${cwd}" ]]; then
@@ -1681,20 +1701,18 @@ cmd_repair() {
 }
 
 sync_policy_to_current_release() {
-  local ps_script
-  ps_script="$(cat <<EOF
-\$ErrorActionPreference = 'Stop'
-\$policyPath = '$(remote_cmd_path "${TARGET_POLICY_PATH}")'
-\$currentReleaseFile = '$(remote_cmd_path "${TARGET_NATIVE_CURRENT_FILE}")'
-if (-not (Test-Path -LiteralPath \$policyPath)) { return }
-if (-not (Test-Path -LiteralPath \$currentReleaseFile)) { return }
-\$currentRelease = (Get-Content -LiteralPath \$currentReleaseFile -Raw).Trim()
-if ([string]::IsNullOrWhiteSpace(\$currentRelease)) { return }
-New-Item -ItemType Directory -Path \$currentRelease -Force | Out-Null
-Copy-Item -LiteralPath \$policyPath -Destination (Join-Path \$currentRelease 'access-policy.json') -Force
-EOF
-)"
-  ssh_exec_powershell "${ps_script}" >/dev/null
+  local local_policy_file="${1:-}"
+  [[ -f "${local_policy_file}" ]] || return 0
+
+  local current_release_file_cmd
+  current_release_file_cmd="$(remote_cmd_path "${TARGET_NATIVE_CURRENT_FILE}")"
+  local current_release=""
+  current_release="$(ssh_exec_cmd "if exist \"${current_release_file_cmd}\" type \"${current_release_file_cmd}\"" | tr -d '\r' | sed -n '1p')"
+  [[ -n "${current_release}" ]] || return 0
+
+  current_release="$(normalize_remote_path "${current_release}")"
+  ensure_remote_dir "${current_release}"
+  scp_to_remote "${local_policy_file}" "${current_release}/access-policy.json"
 }
 
 cmd_tasks() {
@@ -1824,6 +1842,7 @@ cmd_policy() {
   local target="$1"
   shift
   local mode=""
+  local command_mode=""
   local expected_override=""
   local label=""
   local access_token=""
@@ -1836,6 +1855,11 @@ cmd_policy() {
       --mode)
         [[ $# -ge 2 ]] || die "--mode requires private-only or public-with-token"
         mode="$2"
+        shift 2
+        ;;
+      --command-mode)
+        [[ $# -ge 2 ]] || die "--command-mode requires standard or argv-only"
+        command_mode="$2"
         shift 2
         ;;
       --expected-listen-address)
@@ -1879,12 +1903,23 @@ cmd_policy() {
   if [[ -z "${mode}" ]]; then
     mode="${TARGET_EXPOSURE_MODE}"
   fi
+  if [[ -z "${command_mode}" ]]; then
+    command_mode="${TARGET_COMMAND_MODE}"
+  fi
 
   case "${mode}" in
     private-only|public-with-token)
       ;;
     *)
       die "Unsupported policy mode: ${mode}"
+      ;;
+  esac
+
+  case "${command_mode}" in
+    standard|argv-only)
+      ;;
+    *)
+      die "Unsupported command mode: ${command_mode}"
       ;;
   esac
 
@@ -1906,6 +1941,7 @@ cmd_policy() {
 
   upsert_env_var "${TARGET_ENV_FILE}" "TARGET_EXPECTED_LISTEN_ADDRESS" "${expected_listen_address}"
   upsert_env_var "${TARGET_ENV_FILE}" "TARGET_EXPOSURE_MODE" "${mode}"
+  upsert_env_var "${TARGET_ENV_FILE}" "TARGET_COMMAND_MODE" "${command_mode}"
   upsert_env_var "${TARGET_ENV_FILE}" "TARGET_POLICY_LABEL" "${label}"
   if [[ -n "${access_token}" ]]; then
     upsert_env_var "${TARGET_ENV_FILE}" "TARGET_ACCESS_TOKEN" "${access_token}"
@@ -1914,12 +1950,12 @@ cmd_policy() {
 
   local policy_file
   policy_file="$(mktemp)"
-  write_policy_file "${policy_file}" "${expected_listen_address}" "${mode}" "${label}" "${access_token}"
+  write_policy_file "${policy_file}" "${expected_listen_address}" "${mode}" "${command_mode}" "${label}" "${access_token}"
 
   ensure_remote_parent "${TARGET_POLICY_PATH}"
   scp_to_remote "${policy_file}" "${TARGET_POLICY_PATH}"
+  sync_policy_to_current_release "${policy_file}"
   rm -f "${policy_file}"
-  sync_policy_to_current_release
 
   if [[ ${install_guard} -eq 1 ]]; then
     install_guard_tasks "${expected_listen_address}"
@@ -2306,7 +2342,11 @@ Invoke-Required 'schtasks.exe' @('/Create', '/TN', \$watchTaskName, '/SC', 'MINU
 Invoke-AllowFailure 'schtasks.exe' @('/Run', '/TN', \$watchTaskName) | Out-Null
 EOF
 )"
-  ssh_exec_powershell "${task_update_ps}" >/dev/null
+  if [[ "${TARGET_COMMAND_MODE}" == "argv-only" ]]; then
+    printf 'warning: skipping repair scheduled-task refresh because TARGET_COMMAND_MODE=argv-only blocks PowerShell maintenance transport\n' >&2
+  else
+    ssh_exec_powershell "${task_update_ps}" >/dev/null
+  fi
   ssh_exec_cmd "if exist \"${stage_dir_cmd}\" rmdir /s /q \"${stage_dir_cmd}\""
 
   if [[ ${install_guard} -eq 1 ]]; then

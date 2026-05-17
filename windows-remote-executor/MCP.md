@@ -55,6 +55,7 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_run` and `win_capture` still inherit the wrapper guardrails.
 - Raw `powershell.exe` / `pwsh` transport is blocked by default there.
 - If PowerShell is truly required, use `win_exec_ps_file` or `win_exec_ps_script`.
+- When the remote policy uses `commandMode: "argv-only"`, PowerShell, Python helpers, WSL launchers, and known shells/interpreters are rejected by the Windows-side native executor even if an access token is present.
 
 ## WSL stance
 
@@ -69,3 +70,5 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 For agent clients, use this MCP server over shelling out to `win-remote` directly whenever the tool is available. Shell remains useful for manual debugging, deployment, and compatibility, but MCP should be the default control plane for routine automation.
 
 When a workflow cannot be represented by the existing MCP tools, add a native/MCP capability instead of teaching agents another quoting pattern. The purpose of this executor is to make spaces, quotes, Unicode, long scripts, and WSL arguments reliable by construction.
+
+For locked-down hosts, set policy `--command-mode argv-only` and use only `win_run`/`win_capture` with concrete native executables. Do not use `win_py`, `win_exec_ps_*`, `win_wsl*`, or any shell/interpreter executable on those targets.

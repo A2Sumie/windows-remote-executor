@@ -46,6 +46,7 @@ internal sealed class SshProbe
     public IReadOnlyList<string> ActiveListenAddresses { get; init; } = Array.Empty<string>();
     public string ExposurePolicyLabel { get; init; } = "UNCONFIGURED";
     public string ExposureMode { get; init; } = "private-only";
+    public string CommandMode { get; init; } = "standard";
     public bool AccessTokenRequired { get; init; }
 }
 
@@ -162,6 +163,7 @@ internal static class ProbeCollector
                 ActiveListenAddresses = activeListenAddresses,
                 ExposurePolicyLabel = policy?.Label ?? "UNCONFIGURED",
                 ExposureMode = policy?.ExposureMode ?? "private-only",
+                CommandMode = policy?.CommandMode ?? "standard",
                 AccessTokenRequired = policy?.AccessTokenRequired ?? false
             },
             Network = CollectNetworks(),

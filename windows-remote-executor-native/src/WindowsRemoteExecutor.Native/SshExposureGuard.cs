@@ -61,6 +61,7 @@ internal sealed class SshGuardResult
     public string Timestamp { get; init; } = DateTimeOffset.Now.ToString("o");
     public string PolicyLabel { get; init; } = "UNCONFIGURED";
     public string ExposureMode { get; init; } = "private-only";
+    public string CommandMode { get; init; } = "standard";
     public bool AccessTokenRequired { get; init; }
     public string ExpectedListenAddress { get; init; } = string.Empty;
     public IReadOnlyList<string> ConfiguredListenAddresses { get; init; } = Array.Empty<string>();
@@ -173,6 +174,7 @@ internal static class SshExposureGuard
         {
             PolicyLabel = policy?.Label ?? "UNCONFIGURED",
             ExposureMode = policy?.ExposureMode ?? "private-only",
+            CommandMode = policy?.CommandMode ?? "standard",
             AccessTokenRequired = policy?.AccessTokenRequired ?? false,
             ExpectedListenAddress = expected,
             ConfiguredListenAddresses = configured,
@@ -223,6 +225,7 @@ internal static class SshExposureGuard
                 result.Timestamp,
                 $"label={result.PolicyLabel}",
                 $"mode={result.ExposureMode}",
+                $"commandMode={result.CommandMode}",
                 $"safe={result.Safe}",
                 $"disabled={result.SshdDisabled}",
                 $"expected={result.ExpectedListenAddress}",

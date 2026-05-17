@@ -180,6 +180,14 @@ Install or refresh the remote access policy and guard:
 ./windows-remote-executor/bin/win-remote repair winbox
 ```
 
+Force the Windows-side executor into argv-only command mode:
+
+```bash
+./windows-remote-executor/bin/win-remote policy winbox --command-mode argv-only
+```
+
+In `argv-only` mode, the native executor rejects `powershell-b64`, `python-b64`, WSL command/script launchers, and `run`/`capture` attempts whose executable is a known shell or interpreter such as `cmd.exe`, `powershell.exe`, `pwsh.exe`, `py.exe`, `python.exe`, `wsl.exe`, `bash.exe`, or `sh.exe`. Use only `run`/`capture` with a concrete native executable and explicit argv. Set `--command-mode standard` to restore the compatibility behavior.
+
 Rotate the local token and re-install the policy:
 
 ```bash
@@ -211,9 +219,9 @@ The guard logic is intentionally conservative.
 - if `sshd` drifts away from the expected listen address, `guard-sshd` stops the service and changes startup to demand
 - `sshd` is configured with Windows service failure restart actions and a repair watch scheduled task
 - `public-with-token` is allowed only when the policy explicitly says so and an access token hash is configured
-- the probe and guard output always surfaces the policy label, exposure mode, and whether a token is required
+- the probe and guard output always surfaces the policy label, exposure mode, command mode, and whether a token is required
 
-When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument.
+When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument. When `commandMode` is `argv-only`, the token is still required but not sufficient for blocked interpreter/shell routes.
 
 ## Notes
 

@@ -7,11 +7,18 @@ TOOL_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 WIN_REMOTE="${TOOL_ROOT}/bin/win-remote"
 
 TARGET="${1:-}"
+ARGV_ONLY=0
+
+if [[ "${TARGET}" == "--argv-only" ]]; then
+  ARGV_ONLY=1
+  TARGET="${2:-}"
+fi
 
 if [[ -z "${TARGET}" ]]; then
   cat >&2 <<'EOF'
 Usage:
   verify-remote-cases.sh <target-name-or-env-file>
+  verify-remote-cases.sh --argv-only <target-name-or-env-file>
 
 Runs a remote regression matrix for quoting, spaces, stdin EOF, large
 captured output, raw PowerShell blocking, and optional WSL staging.
@@ -118,18 +125,26 @@ if not isinstance(payload, dict) or not payload:
     raise SystemExit("probe did not return a JSON object")
 PY
 
-status_line "capture large stdout/stderr without pipe deadlock"
-LARGE_JSON="${TMP_DIR}/large.json"
-"${WIN_REMOTE}" capture "${TARGET}" --out "${LARGE_JSON}" py.exe -3 -c 'import sys; sys.stdout.write("x"*1048576); sys.stderr.write("e"*65536)' >/dev/null
-assert_json_eq "${LARGE_JSON}" "exitCode" "0"
-assert_json_int_ge "${LARGE_JSON}" "stdoutBytes" 1048576
-assert_json_int_ge "${LARGE_JSON}" "stderrBytes" 65536
+if [[ ${ARGV_ONLY} -eq 0 ]]; then
+  status_line "capture large stdout/stderr without pipe deadlock"
+  LARGE_JSON="${TMP_DIR}/large.json"
+  "${WIN_REMOTE}" capture "${TARGET}" --out "${LARGE_JSON}" py.exe -3 -c 'import sys; sys.stdout.write("x"*1048576); sys.stderr.write("e"*65536)' >/dev/null
+  assert_json_eq "${LARGE_JSON}" "exitCode" "0"
+  assert_json_int_ge "${LARGE_JSON}" "stdoutBytes" 1048576
+  assert_json_int_ge "${LARGE_JSON}" "stderrBytes" 65536
 
-status_line "capture process that reads stdin observes EOF"
-STDIN_JSON="${TMP_DIR}/stdin.json"
-"${WIN_REMOTE}" capture "${TARGET}" --out "${STDIN_JSON}" py.exe -3 -c 'import sys; print("stdin-len=%d" % len(sys.stdin.read()))' >/dev/null
-assert_json_eq "${STDIN_JSON}" "exitCode" "0"
-assert_json_contains "${STDIN_JSON}" "stdoutText" "stdin-len=0"
+  status_line "capture process that reads stdin observes EOF"
+  STDIN_JSON="${TMP_DIR}/stdin.json"
+  "${WIN_REMOTE}" capture "${TARGET}" --out "${STDIN_JSON}" py.exe -3 -c 'import sys; print("stdin-len=%d" % len(sys.stdin.read()))' >/dev/null
+  assert_json_eq "${STDIN_JSON}" "exitCode" "0"
+  assert_json_contains "${STDIN_JSON}" "stdoutText" "stdin-len=0"
+else
+  status_line "argv-only allows ordinary native argv capture"
+  WHOAMI_JSON="${TMP_DIR}/whoami.json"
+  "${WIN_REMOTE}" capture "${TARGET}" --out "${WHOAMI_JSON}" whoami.exe /user >/dev/null
+  assert_json_eq "${WHOAMI_JSON}" "exitCode" "0"
+  assert_json_int_ge "${WHOAMI_JSON}" "stdoutBytes" 1
+fi
 
 status_line "raw PowerShell transport is blocked by default"
 RAW_PS_LOG="${TMP_DIR}/raw-powershell.log"
@@ -145,10 +160,21 @@ fi
 
 status_line "structured PowerShell exec path still works"
 EXEC_LOG="${TMP_DIR}/exec.log"
-"${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" <<'EOF'
+if [[ ${ARGV_ONLY} -eq 0 ]]; then
+  "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" <<'EOF'
 Write-Output 'structured-exec-ok'
 EOF
-grep -q 'structured-exec-ok' "${EXEC_LOG}"
+  grep -q 'structured-exec-ok' "${EXEC_LOG}"
+else
+  if "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" 2>&1 <<'EOF'
+Write-Output 'should-not-run'
+EOF
+  then
+    printf 'error: PowerShell exec unexpectedly succeeded in argv-only mode\n' >&2
+    exit 1
+  fi
+  grep -q 'argv-only' "${EXEC_LOG}"
+fi
 
 status_line "put/get remote path and filename containing spaces"
 LOCAL_PAYLOAD="${TMP_DIR}/payload with spaces.txt"
@@ -159,15 +185,16 @@ REMOTE_PAYLOAD="${REMOTE_CASE_ROOT}/payload with spaces.txt"
 "${WIN_REMOTE}" get "${TARGET}" "${REMOTE_PAYLOAD}" "${ROUNDTRIP_PAYLOAD}" >/dev/null
 cmp "${LOCAL_PAYLOAD}" "${ROUNDTRIP_PAYLOAD}"
 
-status_line "python script path, cwd, and argv with spaces/quotes/unicode"
-REMOTE_SCRIPT="${REMOTE_CASE_ROOT}/script dir/echo args with spaces.py"
-"${WIN_REMOTE}" put "${TARGET}" "${TOOL_ROOT}/examples/echo_args.py" "${REMOTE_SCRIPT}" >/dev/null
-PY_LOG="${TMP_DIR}/py.log"
-"${WIN_REMOTE}" py "${TARGET}" "${REMOTE_SCRIPT}" --cwd "${REMOTE_CASE_ROOT}/script dir" -- \
-  "alpha beta" \
-  'quote"ok' \
-  'unicode-値' >"${PY_LOG}"
-python3 - "${PY_LOG}" "${REMOTE_CASE_ROOT}/script dir" <<'PY'
+if [[ ${ARGV_ONLY} -eq 0 ]]; then
+  status_line "python script path, cwd, and argv with spaces/quotes/unicode"
+  REMOTE_SCRIPT="${REMOTE_CASE_ROOT}/script dir/echo args with spaces.py"
+  "${WIN_REMOTE}" put "${TARGET}" "${TOOL_ROOT}/examples/echo_args.py" "${REMOTE_SCRIPT}" >/dev/null
+  PY_LOG="${TMP_DIR}/py.log"
+  "${WIN_REMOTE}" py "${TARGET}" "${REMOTE_SCRIPT}" --cwd "${REMOTE_CASE_ROOT}/script dir" -- \
+    "alpha beta" \
+    'quote"ok' \
+    'unicode-値' >"${PY_LOG}"
+  python3 - "${PY_LOG}" "${REMOTE_CASE_ROOT}/script dir" <<'PY'
 import json
 import sys
 
@@ -183,15 +210,32 @@ if argv[-3:] != required:
 if cwd.lower() != expected_cwd.lower():
     raise SystemExit(f"cwd mismatch: {cwd!r} != {expected_cwd!r}")
 PY
+else
+  status_line "argv-only blocks Python helper and interpreter attempts"
+  PY_LOG="${TMP_DIR}/py-blocked.log"
+  if "${WIN_REMOTE}" py "${TARGET}" C:/CodexRemote/inbox/does-not-matter.py >"${PY_LOG}" 2>&1; then
+    printf 'error: win-remote py unexpectedly succeeded in argv-only mode\n' >&2
+    exit 1
+  fi
+  grep -q 'argv-only' "${PY_LOG}"
 
-status_line "direct capture argv with spaces/quotes/unicode"
-ARGV_JSON="${TMP_DIR}/argv.json"
-"${WIN_REMOTE}" capture "${TARGET}" --out "${ARGV_JSON}" py.exe -3 -X utf8 -c 'import json, sys; print(json.dumps(sys.argv[1:], ensure_ascii=False))' \
-  "alpha beta" \
-  'quote"ok' \
-  'unicode-値' >/dev/null
-assert_json_eq "${ARGV_JSON}" "exitCode" "0"
-python3 - "${ARGV_JSON}" <<'PY'
+  PY_CAPTURE_LOG="${TMP_DIR}/py-capture-blocked.log"
+  if "${WIN_REMOTE}" capture "${TARGET}" py.exe -3 -c 'print("should-not-run")' >"${PY_CAPTURE_LOG}" 2>&1; then
+    printf 'error: py.exe capture unexpectedly succeeded in argv-only mode\n' >&2
+    exit 1
+  fi
+  grep -q 'argv-only' "${PY_CAPTURE_LOG}"
+fi
+
+if [[ ${ARGV_ONLY} -eq 0 ]]; then
+  status_line "direct capture argv with spaces/quotes/unicode"
+  ARGV_JSON="${TMP_DIR}/argv.json"
+  "${WIN_REMOTE}" capture "${TARGET}" --out "${ARGV_JSON}" py.exe -3 -X utf8 -c 'import json, sys; print(json.dumps(sys.argv[1:], ensure_ascii=False))' \
+    "alpha beta" \
+    'quote"ok' \
+    'unicode-値' >/dev/null
+  assert_json_eq "${ARGV_JSON}" "exitCode" "0"
+  python3 - "${ARGV_JSON}" <<'PY'
 import json
 import sys
 
@@ -203,10 +247,12 @@ expected = ["alpha beta", 'quote"ok', "unicode-値"]
 if argv != expected:
     raise SystemExit(f"argv mismatch: {argv!r}")
 PY
+fi
 
-status_line "optional WSL structured argv/staging"
-WSL_PROBE="${TMP_DIR}/wsl-probe.json"
-if "${WIN_REMOTE}" wsl-capture "${TARGET}" --out "${WSL_PROBE}" /usr/bin/uname -a >/dev/null 2>&1; then
+if [[ ${ARGV_ONLY} -eq 0 ]]; then
+  status_line "optional WSL structured argv/staging"
+  WSL_PROBE="${TMP_DIR}/wsl-probe.json"
+  if "${WIN_REMOTE}" wsl-capture "${TARGET}" --out "${WSL_PROBE}" /usr/bin/uname -a >/dev/null 2>&1; then
   WSL_JSON="${TMP_DIR}/wsl-sh.json"
   "${WIN_REMOTE}" wsl-sh-capture "${TARGET}" --out "${WSL_JSON}" --stdin -- \
     "alpha beta" \
@@ -223,8 +269,17 @@ EOF
   assert_json_contains "${WSL_JSON}" "stdoutText" "<alpha beta>"
   assert_json_contains "${WSL_JSON}" "stdoutText" '<quote"ok>'
   assert_json_contains "${WSL_JSON}" "stdoutText" "<unicode-値>"
+  else
+    status_line "WSL unavailable or blocked on target; skipping WSL-specific case"
+  fi
 else
-  status_line "WSL unavailable or blocked on target; skipping WSL-specific case"
+  status_line "argv-only blocks WSL command/script paths"
+  WSL_LOG="${TMP_DIR}/wsl-blocked.log"
+  if "${WIN_REMOTE}" wsl-capture "${TARGET}" /usr/bin/uname -a >"${WSL_LOG}" 2>&1; then
+    printf 'error: WSL capture unexpectedly succeeded in argv-only mode\n' >&2
+    exit 1
+  fi
+  grep -q 'argv-only' "${WSL_LOG}"
 fi
 
 status_line "all cases passed"

@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.9"
+SERVER_VERSION = "0.1.11"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 
@@ -143,7 +143,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_py",
-            "description": "Run a Python script on the Windows target.",
+            "description": "Run a Python script on the Windows target. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -161,7 +161,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl",
-            "description": "Run a Linux program through WSL with structured distro/user/cwd arguments.",
+            "description": "Run a Linux program through WSL with structured distro/user/cwd arguments. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -179,7 +179,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl_capture",
-            "description": "Run a Linux program through WSL and return structured stdout/stderr capture.",
+            "description": "Run a Linux program through WSL and return structured stdout/stderr capture. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -197,7 +197,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl_script",
-            "description": "Run a shell script through WSL through staged file transfer instead of composing bash -lc command strings.",
+            "description": "Run a shell script through WSL through staged file transfer instead of composing bash -lc command strings. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -216,7 +216,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl_script_capture",
-            "description": "Run a shell script through WSL through staged file transfer and return structured stdout/stderr capture.",
+            "description": "Run a shell script through WSL through staged file transfer and return structured stdout/stderr capture. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -235,7 +235,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_wsl_resident",
-            "description": "Launch a WSL shell script as a verified resident process and return structured readiness diagnostics.",
+            "description": "Launch a WSL shell script as a verified resident process and return structured readiness diagnostics. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -331,7 +331,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_exec_ps_file",
-            "description": "Run a PowerShell file through the wrapper's controlled UTF-8/base64 path.",
+            "description": "Run a PowerShell file through the wrapper's controlled UTF-8/base64 path. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -344,7 +344,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_exec_ps_script",
-            "description": "Run a PowerShell script body through stdin so the client never needs inline shell quoting.",
+            "description": "Run a PowerShell script body through stdin so the client never needs inline shell quoting. Blocked when the target policy is commandMode=argv-only.",
             "inputSchema": {
                 "type": "object",
                 "properties": {

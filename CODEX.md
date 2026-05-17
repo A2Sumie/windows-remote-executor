@@ -17,6 +17,7 @@ Use `windows-remote-executor/bin/win-remote` for manual debugging, deployment, a
 - Prefer `run`, `capture`, `wsl`, `wsl-capture`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
 - Do not hand-compose Windows command lines when the native/MCP path can carry structured argv or a base64 script body.
 - If a workflow needs new coverage, add a native subcommand or MCP tool instead of adding another quoting convention.
+- For locked-down hosts, set `policy --command-mode argv-only`; then use only `run`/`capture` with concrete native executables and explicit argv.
 - Use `run` for `dism.exe` and other Windows-native platform tools instead of wrapping them in PowerShell.
 - Use `wsl`, `wsl-capture`, or `wsl-sh` for Linux-side execution inside WSL.
 - `wsl-sh` now stages scripts through file transfer and runs them from a Linux temp path, so `--file` and `--stdin` are safe for longer scripts.

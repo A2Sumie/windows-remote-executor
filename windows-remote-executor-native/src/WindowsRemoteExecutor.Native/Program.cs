@@ -51,49 +51,49 @@ internal static class Program
                     return await SshRepair.RunCommandAsync(commandArgs);
 
                 case "probe":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     var probe = ProbeCollector.Collect();
                     Console.WriteLine(JsonSerializer.Serialize(probe, JsonOptions));
                     return 0;
 
                 case "run-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunCommandAsync(commandArgs);
 
                 case "capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.CaptureCommandAsync(commandArgs);
 
                 case "python-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunPythonAsync(commandArgs);
 
                 case "powershell-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunPowerShellAsync(commandArgs);
 
                 case "wsl-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunWslAsync(commandArgs);
 
                 case "wsl-capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.CaptureWslAsync(commandArgs);
 
                 case "wsl-script-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunWslScriptAsync(commandArgs);
 
                 case "wsl-script-capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.CaptureWslScriptAsync(commandArgs);
 
                 case "wsl-resident-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunWslResidentAsync(commandArgs);
 
                 case "everything-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken);
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return EverythingSearch.SearchToStdout(commandArgs);
 
                 default:

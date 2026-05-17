@@ -14,23 +14,24 @@ Operating rules:
 1. Prefer `win-remote run`, `win-remote capture`, `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, `win-remote wsl-resident`, `win-remote py`, `win-remote put`, `win-remote get`, `win-remote deploy`, `win-remote probe`, `win-remote policy`, `win-remote guard`, and `win-remote repair`.
 2. For routine agent use, use the structured MCP server instead of composing shell command lines.
 3. Do not hand-compose Windows command lines when the native/MCP path can carry structured argv or a base64 script body. If a workflow needs new coverage, add a native subcommand or MCP tool instead of adding another quoting convention.
-4. Treat PowerShell as a fallback. If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's UTF-8/base64 transport.
-5. Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
-6. On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
-7. If the result is process output and needs stable parsing, prefer `win-remote capture`, which returns JSON with detected encodings plus raw base64 stdout/stderr bytes.
-8. If the result is Windows state, prefer `win-remote exec --stdin` and emit JSON from Windows-local PowerShell instead of parsing localized CLI output over SSH.
-9. For WSL/Linux setup, prefer `win-remote wsl`, `wsl-capture`, `wsl-sh --file/--stdin`, or `wsl-resident` instead of nesting `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths. `wsl-sh` stages scripts through file transfer, so it is the safe path for longer scripts too.
-10. For long quiet foreground WSL commands, add `--heartbeat-seconds <n>` before inventing app-level keepalive output. For durable services, prefer `wsl-resident` over repo-local `tmux` or `nohup`.
-11. Do not invoke the Windows native executor directly unless you have a specific reason. Let `win-remote` handle base64 transport and `--access-token`.
-12. Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
-13. Do not tunnel raw `powershell.exe` or `pwsh` through `win-remote run` or `win-remote capture`; those paths should fail closed by default.
-14. Assume the host should remain `private-only` unless the operator explicitly says otherwise.
-15. Never weaken `access-policy.json`, remove the `sshd` guard, or permit wildcard listeners without explicit operator approval.
-16. Never commit real host env files, access tokens, hostnames, Tailscale IPs, usernames, SSH keys, logs, or publish outputs.
-17. Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
-18. Keep long-lived models, caches, venvs, and hot code on WSL ext4 paths such as `/home/...`, not on `/mnt/*`, and prefer absolute WSL interpreter paths plus `/usr/lib/wsl/lib/nvidia-smi` for brittle tooling.
-19. Prefer the framework-dependent `.NET 8` publish when the Windows host already has the `.NET 8` runtime installed.
-20. Use the self-contained publish only when the host cannot satisfy the framework-dependent runtime requirement.
+4. For locked-down hosts, set `win-remote policy --command-mode argv-only`; then use only `run`/`capture` with concrete native executables and explicit argv. Do not use `exec`, `py`, `wsl*`, `cmd`, or shell/interpreter executables there.
+5. Treat PowerShell as a fallback. If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's UTF-8/base64 transport.
+6. Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
+7. On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
+8. If the result is process output and needs stable parsing, prefer `win-remote capture`, which returns JSON with detected encodings plus raw base64 stdout/stderr bytes.
+9. If the result is Windows state, prefer `win-remote exec --stdin` and emit JSON from Windows-local PowerShell instead of parsing localized CLI output over SSH.
+10. For WSL/Linux setup, prefer `win-remote wsl`, `wsl-capture`, `wsl-sh --file/--stdin`, or `wsl-resident` instead of nesting `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths. `wsl-sh` stages scripts through file transfer, so it is the safe path for longer scripts too.
+11. For long quiet foreground WSL commands, add `--heartbeat-seconds <n>` before inventing app-level keepalive output. For durable services, prefer `wsl-resident` over repo-local `tmux` or `nohup`.
+12. Do not invoke the Windows native executor directly unless you have a specific reason. Let `win-remote` handle base64 transport and `--access-token`.
+13. Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
+14. Do not tunnel raw `powershell.exe` or `pwsh` through `win-remote run` or `win-remote capture`; those paths should fail closed by default.
+15. Assume the host should remain `private-only` unless the operator explicitly says otherwise.
+16. Never weaken `access-policy.json`, remove the `sshd` guard, or permit wildcard listeners without explicit operator approval.
+17. Never commit real host env files, access tokens, hostnames, Tailscale IPs, usernames, SSH keys, logs, or publish outputs.
+18. Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
+19. Keep long-lived models, caches, venvs, and hot code on WSL ext4 paths such as `/home/...`, not on `/mnt/*`, and prefer absolute WSL interpreter paths plus `/usr/lib/wsl/lib/nvidia-smi` for brittle tooling.
+20. Prefer the framework-dependent `.NET 8` publish when the Windows host already has the `.NET 8` runtime installed.
+21. Use the self-contained publish only when the host cannot satisfy the framework-dependent runtime requirement.
 
 Suggested workflow:
 1. Read `windows-remote-executor/README.md` and `windows-remote-executor-native/README.md`.
@@ -53,5 +54,5 @@ Suggested release workflow:
 Use this shorter version when the agent context window is tight.
 
 ```md
-Use this repo's Windows Remote Executor. Use MCP/C# native structured transport for routine agent control and `win-remote` for manual debugging. Do not hand-compose Windows command lines when structured argv or a base64 script body can express the work. PowerShell, if unavoidable, must go through the wrapper's UTF-8/base64 path, not `run` or `capture`. Keep hosts `private-only` by default. Do not remove access-token enforcement or `sshd` guardrails. Never commit real env files, tokens, host addresses, usernames, SSH keys, logs, or publish outputs. Prefer the framework-dependent `.NET 8` build when the Windows host already has `.NET 8`; otherwise use the self-contained publish. Validate changes with `probe`, `guard`, `repair`, and a minimal execution smoke test. When validating resident WSL services, use `wsl-resident` so the executor proves the PID or port still exists after launch.
+Use this repo's Windows Remote Executor. Use MCP/C# native structured transport for routine agent control and `win-remote` for manual debugging. Do not hand-compose Windows command lines when structured argv or a base64 script body can express the work. On hosts configured with `policy --command-mode argv-only`, use only `run`/`capture` with concrete native executables and explicit argv. PowerShell, if unavoidable and policy allows it, must go through the wrapper's UTF-8/base64 path, not `run` or `capture`. Keep hosts `private-only` by default. Do not remove access-token enforcement or `sshd` guardrails. Never commit real env files, tokens, host addresses, usernames, SSH keys, logs, or publish outputs. Prefer the framework-dependent `.NET 8` build when the Windows host already has `.NET 8`; otherwise use the self-contained publish. Validate changes with `probe`, `guard`, `repair`, and a minimal execution smoke test. When validating resident WSL services, use `wsl-resident` so the executor proves the PID or port still exists after launch.
 ```

@@ -37,6 +37,7 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote update-tools` to publish a new Windows-side executor release without overwriting an in-use `.exe`.
 - If existing tools cannot represent a workflow, add a C# native subcommand or MCP tool before inventing another shell quoting convention.
 - Use `win-remote policy` to install or rotate `access-policy.json`.
+- Use `win-remote policy --command-mode argv-only` when the host must reject all shell, PowerShell, Python helper, and WSL launcher routes and allow only native `run`/`capture` argv execution.
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
 - Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
 - Use `win-remote tasks` or MCP `win_tasks` when you need scheduled-task state; do not hand-author `Get-ScheduledTaskInfo -TaskName ...` for names with spaces.
@@ -56,6 +57,7 @@ Treat raw PowerShell command lines as disallowed.
 - Do not use inline PowerShell as a normal control path.
 - Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
 - Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
+- On `argv-only` hosts, do not use `exec`, `py`, `wsl*`, `cmd`, or shell/interpreter executables through `run`/`capture`; the native executor should reject them.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
 - If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, `win-remote wsl-resident`, or MCP `win_wsl_script` / `win_wsl_resident` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
 - Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
