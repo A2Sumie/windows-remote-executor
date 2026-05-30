@@ -72,6 +72,14 @@ internal static class Program
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunPowerShellAsync(commandArgs);
 
+                case "exec-file-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return await ExecutionCommands.RunExecFileAsync(commandArgs);
+
+                case "exec-file-capture-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return await ExecutionCommands.CaptureExecFileAsync(commandArgs);
+
                 case "wsl-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunWslAsync(commandArgs);
@@ -134,6 +142,8 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
               WindowsRemoteExecutor.Native.exe python-b64 [options]
               WindowsRemoteExecutor.Native.exe powershell-b64 [options]
+              WindowsRemoteExecutor.Native.exe exec-file-b64 [options]
+              WindowsRemoteExecutor.Native.exe exec-file-capture-b64 [options]
               WindowsRemoteExecutor.Native.exe wsl-b64 [options]
               WindowsRemoteExecutor.Native.exe wsl-capture-b64 [options]
               WindowsRemoteExecutor.Native.exe wsl-script-b64 [options]
@@ -182,6 +192,12 @@ internal static class Program
 
             powershell-b64 options:
               --script <base64-utf8-script-body>
+              --cwd <base64-utf8-working-directory>
+              --exe <base64-utf8-powershell-path-or-command>
+
+            exec-file-b64 / exec-file-capture-b64 options:
+              --kind <base64-utf8-powershell-or-cmd>
+              --file <base64-utf8-remote-script-path>
               --cwd <base64-utf8-working-directory>
               --exe <base64-utf8-powershell-path-or-command>
 

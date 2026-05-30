@@ -11,7 +11,8 @@ source "${TOOL_ROOT}/lib/common.sh"
 usage() {
   cat <<'EOF'
 Usage:
-  win-remote exec <target> [--file <local-ps1> | --stdin | <powershell-code>]
+  win-remote exec <target> [--cwd <remote-dir>] [--shell <powershell|cmd>] [--file <local-script> | --stdin | <script-code>]
+  win-remote exec-capture <target> [--cwd <remote-dir>] [--shell <powershell|cmd>] [--out <local-json-file>] [--file <local-script> | --stdin | <script-code>]
   win-remote cmd <target> <cmd-code>
   win-remote run <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]
   win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
@@ -214,16 +215,20 @@ EOF
 
 ssh_exec_powershell() {
   local code="$1"
-  local -a native_tokens=("powershell-b64" "--script" "$(encode_utf8_b64 "${code}")")
-  if [[ -n "${TARGET_PS_EXE}" ]]; then
-    native_tokens+=("--exe" "$(encode_utf8_b64 "${TARGET_PS_EXE}")")
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  local local_script_path="${temp_dir}/payload.ps1"
+  printf '%s' "${code}" >"${local_script_path}"
+
+  local status=0
+  if invoke_exec_file_bridge "run" "powershell" "" "${local_script_path}"; then
+    status=0
+  else
+    status=$?
   fi
 
-  if ssh_exec_native_tokens "${native_tokens[@]}"; then
-    return 0
-  fi
+  cleanup_exec_source_best_effort "${temp_dir}"
 
-  local status=$?
   if [[ ${status} -eq 127 ]]; then
     die "PowerShell execution now requires ${TARGET_NATIVE_EXE} on the remote host."
   fi
@@ -486,6 +491,132 @@ cleanup_wsl_stage_best_effort() {
   fi
 }
 
+normalize_exec_kind() {
+  local kind="$1"
+  kind="$(printf '%s' "${kind}" | tr '[:upper:]' '[:lower:]')"
+  case "${kind}" in
+    ps|powershell)
+      printf 'powershell'
+      ;;
+    cmd|batch)
+      printf 'cmd'
+      ;;
+    *)
+      die "Unsupported exec shell: ${kind}. Use powershell or cmd."
+      ;;
+  esac
+}
+
+exec_payload_suffix() {
+  case "$1" in
+    powershell)
+      printf 'ps1'
+      ;;
+    cmd)
+      printf 'cmd'
+      ;;
+    *)
+      die "Unsupported exec payload kind: $1"
+      ;;
+  esac
+}
+
+prepare_exec_source_file() {
+  local command_name="$1"
+  local kind="$2"
+  shift 2
+
+  PREPARED_EXEC_SOURCE_FILE=""
+  PREPARED_EXEC_CLEANUP_DIR=""
+
+  local suffix
+  suffix="$(exec_payload_suffix "${kind}")"
+
+  case "${1:-}" in
+    --file)
+      [[ $# -eq 2 ]] || die "${command_name} --file requires exactly one local file path"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      PREPARED_EXEC_SOURCE_FILE="$2"
+      ;;
+    --stdin)
+      [[ $# -eq 1 ]] || die "${command_name} --stdin does not accept extra arguments"
+      PREPARED_EXEC_CLEANUP_DIR="$(mktemp -d)"
+      PREPARED_EXEC_SOURCE_FILE="${PREPARED_EXEC_CLEANUP_DIR}/payload.${suffix}"
+      cat >"${PREPARED_EXEC_SOURCE_FILE}"
+      ;;
+    "")
+      die "${command_name} requires inline script, --file <local-script>, or --stdin"
+      ;;
+    *)
+      PREPARED_EXEC_CLEANUP_DIR="$(mktemp -d)"
+      PREPARED_EXEC_SOURCE_FILE="${PREPARED_EXEC_CLEANUP_DIR}/payload.${suffix}"
+      printf '%s' "$*" >"${PREPARED_EXEC_SOURCE_FILE}"
+      ;;
+  esac
+}
+
+cleanup_exec_source_best_effort() {
+  local cleanup_dir="${1:-}"
+  if [[ -n "${cleanup_dir}" ]]; then
+    rm -rf "${cleanup_dir}" || true
+  fi
+}
+
+invoke_exec_file_bridge() {
+  local mode="$1"
+  local kind="$2"
+  local cwd="$3"
+  local local_script_path="$4"
+
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/exec-bridge-${stage_id}"
+  local suffix
+  suffix="$(exec_payload_suffix "${kind}")"
+  local remote_stage_path="${remote_stage_dir}/payload.${suffix}"
+
+  local native_command="exec-file-b64"
+  if [[ "${mode}" == "capture" ]]; then
+    native_command="exec-file-capture-b64"
+  elif [[ "${mode}" != "run" ]]; then
+    die "Unsupported exec bridge mode: ${mode}"
+  fi
+
+  local setup_status=0
+  if ensure_remote_dir "${remote_stage_dir}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_remote_dir_best_effort "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+  if scp_to_remote "${local_script_path}" "${remote_stage_path}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_remote_dir_best_effort "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+
+  local -a native_tokens=("${native_command}" "--kind" "$(encode_utf8_b64 "${kind}")" "--file" "$(encode_utf8_b64 "${remote_stage_path}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ "${kind}" == "powershell" && -n "${TARGET_PS_EXE}" ]]; then
+    native_tokens+=("--exe" "$(encode_utf8_b64 "${TARGET_PS_EXE}")")
+  fi
+
+  local run_status=0
+  if ssh_exec_native_tokens "${native_tokens[@]}"; then
+    run_status=0
+  else
+    run_status=$?
+  fi
+
+  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  return "${run_status}"
+}
+
 render_native_launcher() {
   local primary_path="$1"
   local fallback_path="$2"
@@ -548,21 +679,109 @@ scp_from_remote() {
 }
 
 cmd_exec() {
-  [[ $# -ge 2 ]] || die "exec requires <target> plus inline PowerShell, --file <local-ps1>, or --stdin"
-  load_target "$1"
-  guard_argv_only_route "exec"
+  [[ $# -ge 2 ]] || die "exec requires <target> plus inline script, --file <local-script>, or --stdin"
+  local target="$1"
   shift
-  local code
-  code="$(read_text_source "exec" "$@")"
-  ssh_exec_powershell "${code}"
+
+  local cwd=""
+  local kind="powershell"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a remote directory"
+        cwd="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --shell|--kind)
+        [[ $# -ge 2 ]] || die "$1 requires powershell or cmd"
+        kind="$(normalize_exec_kind "$2")"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  prepare_exec_source_file "exec" "${kind}" "$@"
+
+  local status=0
+  if invoke_exec_file_bridge "run" "${kind}" "${cwd}" "${PREPARED_EXEC_SOURCE_FILE}"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  cleanup_exec_source_best_effort "${PREPARED_EXEC_CLEANUP_DIR}"
+  return "${status}"
+}
+
+cmd_exec_capture() {
+  [[ $# -ge 2 ]] || die "exec-capture requires <target> plus inline script, --file <local-script>, or --stdin"
+  local target="$1"
+  shift
+
+  local cwd=""
+  local kind="powershell"
+  local out_file=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a remote directory"
+        cwd="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --shell|--kind)
+        [[ $# -ge 2 ]] || die "$1 requires powershell or cmd"
+        kind="$(normalize_exec_kind "$2")"
+        shift 2
+        ;;
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a local JSON file path"
+        out_file="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  load_target "${target}"
+  prepare_exec_source_file "exec-capture" "${kind}" "$@"
+
+  local capture_output=""
+  local capture_status=0
+  if capture_output="$(invoke_exec_file_bridge "capture" "${kind}" "${cwd}" "${PREPARED_EXEC_SOURCE_FILE}")"; then
+    capture_status=0
+  else
+    capture_status=$?
+  fi
+
+  cleanup_exec_source_best_effort "${PREPARED_EXEC_CLEANUP_DIR}"
+  print_capture_output "${capture_output}" "${out_file}"
+  return "${capture_status}"
 }
 
 cmd_cmd() {
   [[ $# -ge 2 ]] || die "cmd requires <target> <cmd-code>"
   load_target "$1"
-  guard_argv_only_route "cmd"
   shift
-  ssh_exec_cmd "$*"
+  local temp_dir
+  temp_dir="$(mktemp -d)"
+  local local_script_path="${temp_dir}/payload.cmd"
+  printf '%s' "$*" >"${local_script_path}"
+
+  local status=0
+  if invoke_exec_file_bridge "run" "cmd" "" "${local_script_path}"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  cleanup_exec_source_best_effort "${temp_dir}"
+  return "${status}"
 }
 
 cmd_run() {
@@ -2122,14 +2341,14 @@ cmd_ps_check() {
   local body_lines
   body_lines="$(printf '%s' "${code}" | awk 'END { print NR }')"
 
-  printf 'transport=utf8-base64-via-native-executor\n'
+  printf 'transport=staged-file-via-native-exec-bridge\n'
   printf 'body_chars=%s\n' "${body_chars}"
   printf 'body_lines=%s\n' "${body_lines}"
   printf 'body_utf8_base64_chars=%s\n' "${#body_b64}"
   printf 'wrapped_chars=%s\n' "${wrapped_chars}"
   printf 'encoded_command_chars=%s\n' "${#encoded_command}"
   printf 'utf8_roundtrip=%s\n' "${utf8_roundtrip}"
-  printf 'remote_executor_route=%s\n' "WindowsRemoteExecutor.Native.exe powershell-b64"
+  printf 'remote_executor_route=%s\n' "WindowsRemoteExecutor.Native.exe exec-file-b64 --kind powershell --file <staged-script>"
 }
 
 cmd_update_tools() {
@@ -2342,11 +2561,7 @@ Invoke-Required 'schtasks.exe' @('/Create', '/TN', \$watchTaskName, '/SC', 'MINU
 Invoke-AllowFailure 'schtasks.exe' @('/Run', '/TN', \$watchTaskName) | Out-Null
 EOF
 )"
-  if [[ "${TARGET_COMMAND_MODE}" == "argv-only" ]]; then
-    printf 'warning: skipping repair scheduled-task refresh because TARGET_COMMAND_MODE=argv-only blocks PowerShell maintenance transport\n' >&2
-  else
-    ssh_exec_powershell "${task_update_ps}" >/dev/null
-  fi
+  ssh_exec_powershell "${task_update_ps}" >/dev/null
   ssh_exec_cmd "if exist \"${stage_dir_cmd}\" rmdir /s /q \"${stage_dir_cmd}\""
 
   if [[ ${install_guard} -eq 1 ]]; then
@@ -2369,6 +2584,9 @@ main() {
   case "${subcommand}" in
     exec)
       cmd_exec "$@"
+      ;;
+    exec-capture)
+      cmd_exec_capture "$@"
       ;;
     cmd)
       cmd_cmd "$@"

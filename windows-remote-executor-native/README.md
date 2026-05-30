@@ -15,6 +15,8 @@ The current native CLI exposes:
 - `capture-b64`
 - `python-b64`
 - `powershell-b64`
+- `exec-file-b64`
+- `exec-file-capture-b64`
 - `wsl-b64`
 - `wsl-capture-b64`
 - `wsl-script-b64`
@@ -29,7 +31,7 @@ The current native CLI exposes:
 
 `probe` returns machine state plus the active exposure policy label, listen addresses, and whether an access token is required.
 
-`run-b64`, `python-b64`, `powershell-b64`, and the WSL commands execute payloads without depending on local shell quoting on the controlling machine.
+`run-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, and the WSL commands execute payloads without depending on local shell quoting on the controlling machine. `exec-file-b64` is the preferred script bridge because the script body arrives as a staged file, not as a large base64 argv token.
 
 `wsl-b64` and `wsl-capture-b64` run Linux programs through `wsl.exe --exec` with structured distro/user/cwd arguments.
 
@@ -55,11 +57,12 @@ Use it when output may be UTF-16, locale-codepage, or byte-sensitive and you wan
 
 - `expectedListenAddress`
 - `exposureMode`
+- `commandMode`
 - `label`
 - `accessTokenSha256`
 - `updatedAt`
 
-If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, the WSL commands, and `everything-b64`.
+If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64`.
 
 `public-with-token` is only valid when a token hash exists. The intended default is still `private-only`.
 
@@ -115,7 +118,7 @@ If you need to revert a host that was already switched to a PowerShell login she
 ## Notes
 
 - The intended steady state is "PowerShell minimized", not "PowerShell everywhere".
-- PowerShell is still available, but it is expected to arrive only through the wrapper's UTF-8/base64 transport before PowerShell starts.
+- PowerShell is still available, but it is expected to arrive through the wrapper's staged exec bridge before PowerShell starts.
 - Raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport are outside the supported path.
 - On `X570`, `cmd.exe` is also outside the supported steady-state control path. Prefer direct native executables through `run-b64`.
 - `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.

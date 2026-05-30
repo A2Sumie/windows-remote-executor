@@ -164,6 +164,70 @@ internal sealed class PowerShellScriptOptions
     }
 }
 
+internal sealed class ExecScriptFileOptions
+{
+    public string Kind { get; init; } = "powershell";
+    public string ScriptPath { get; init; } = string.Empty;
+    public string? WorkingDirectory { get; init; }
+    public string? PowerShellExecutable { get; init; }
+
+    public static ExecScriptFileOptions FromBase64Args(string[] args)
+    {
+        var kind = "powershell";
+        var scriptPath = string.Empty;
+        string? workingDirectory = null;
+        string? powerShellExecutable = null;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--kind":
+                    kind = Base64Args.ReadValue(args, ref i, "--kind");
+                    break;
+                case "--file":
+                case "--script-file":
+                    scriptPath = Base64Args.ReadValue(args, ref i, args[i]);
+                    break;
+                case "--cwd":
+                    workingDirectory = Base64Args.ReadValue(args, ref i, "--cwd");
+                    break;
+                case "--exe":
+                    powerShellExecutable = Base64Args.ReadValue(args, ref i, "--exe");
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown exec-file option: {args[i]}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(scriptPath))
+        {
+            throw new ArgumentException("--file is required.");
+        }
+
+        kind = NormalizeKind(kind);
+
+        return new ExecScriptFileOptions
+        {
+            Kind = kind,
+            ScriptPath = scriptPath,
+            WorkingDirectory = workingDirectory,
+            PowerShellExecutable = powerShellExecutable
+        };
+    }
+
+    private static string NormalizeKind(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "ps" or "powershell" => "powershell",
+            "cmd" or "batch" => "cmd",
+            _ => throw new ArgumentException("--kind must be powershell or cmd.")
+        };
+    }
+}
+
 internal sealed class WslProcessOptions
 {
     public string FilePath { get; init; } = string.Empty;
@@ -492,24 +556,110 @@ internal static class ExecutionCommands
     public static async Task<int> RunPowerShellAsync(string[] args)
     {
         var options = PowerShellScriptOptions.FromBase64Args(args);
-        var executable = ResolvePowerShellExecutable(options.PowerShellExecutable);
-        var wrappedScript = ComposePowerShellScript(options.ScriptBody);
-        var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(wrappedScript));
+        return await RunPowerShellScriptAsync(
+            options.ScriptBody,
+            options.WorkingDirectory,
+            options.PowerShellExecutable);
+    }
 
+    public static async Task<int> RunExecFileAsync(string[] args)
+    {
+        var options = ExecScriptFileOptions.FromBase64Args(args);
+        return await RunExecFileInternalAsync(options);
+    }
+
+    public static async Task<int> CaptureExecFileAsync(string[] args)
+    {
+        var options = ExecScriptFileOptions.FromBase64Args(args);
+        var result = await CaptureExecFileResultAsync(options);
+        WriteCapturePayload(result);
+        return result.ExitCode;
+    }
+
+    private static async Task<int> RunPowerShellScriptAsync(
+        string scriptBody,
+        string? workingDirectory,
+        string? powerShellExecutable)
+    {
+        var executable = ResolvePowerShellExecutable(powerShellExecutable);
         return await ProcessRunner.RunPassthroughAsync(
             executable,
-            new[]
-            {
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-                encodedCommand
-            },
-            options.WorkingDirectory,
+            BuildPowerShellEncodedArguments(scriptBody),
+            workingDirectory,
             OutputEncodingPreference.Utf8);
+    }
+
+    private static async Task<ProcessResult> CapturePowerShellScriptAsync(
+        string scriptBody,
+        string? workingDirectory,
+        string? powerShellExecutable)
+    {
+        var executable = ResolvePowerShellExecutable(powerShellExecutable);
+        return await ProcessRunner.RunCaptureAsync(
+            executable,
+            BuildPowerShellEncodedArguments(scriptBody),
+            workingDirectory,
+            OutputEncodingPreference.Utf8);
+    }
+
+    private static IReadOnlyList<string> BuildPowerShellEncodedArguments(string scriptBody)
+    {
+        var wrappedScript = ComposePowerShellScript(scriptBody);
+        var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(wrappedScript));
+        return new[]
+        {
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            encodedCommand
+        };
+    }
+
+    private static async Task<int> RunExecFileInternalAsync(ExecScriptFileOptions options)
+    {
+        return options.Kind switch
+        {
+            "powershell" => await RunPowerShellScriptAsync(
+                ReadScriptFile(options.ScriptPath),
+                options.WorkingDirectory,
+                options.PowerShellExecutable),
+            "cmd" => await RunCmdScriptFileAsync(options.ScriptPath, options.WorkingDirectory),
+            _ => throw new ArgumentException($"Unsupported exec-file kind: {options.Kind}")
+        };
+    }
+
+    private static async Task<ProcessResult> CaptureExecFileResultAsync(ExecScriptFileOptions options)
+    {
+        return options.Kind switch
+        {
+            "powershell" => await CapturePowerShellScriptAsync(
+                ReadScriptFile(options.ScriptPath),
+                options.WorkingDirectory,
+                options.PowerShellExecutable),
+            "cmd" => await CaptureCmdScriptFileAsync(options.ScriptPath, options.WorkingDirectory),
+            _ => throw new ArgumentException($"Unsupported exec-file kind: {options.Kind}")
+        };
+    }
+
+    private static async Task<int> RunCmdScriptFileAsync(string scriptPath, string? workingDirectory)
+    {
+        return await ProcessRunner.RunPassthroughAsync(
+            ResolveCmdExecutable(),
+            new[] { "/d", "/q", "/c", scriptPath },
+            workingDirectory,
+            OutputEncodingPreference.Auto);
+    }
+
+    private static async Task<ProcessResult> CaptureCmdScriptFileAsync(string scriptPath, string? workingDirectory)
+    {
+        return await ProcessRunner.RunCaptureAsync(
+            ResolveCmdExecutable(),
+            new[] { "/d", "/q", "/c", scriptPath },
+            workingDirectory,
+            OutputEncodingPreference.Auto);
     }
 
     public static async Task<int> RunWslAsync(string[] args)
@@ -750,6 +900,32 @@ internal static class ExecutionCommands
         }
 
         throw new InvalidOperationException("No usable PowerShell executable found. Pass --exe explicitly or install powershell.exe/pwsh.exe.");
+    }
+
+    private static string ResolveCmdExecutable()
+    {
+        var inboxCmd = Path.Combine(Environment.SystemDirectory, "cmd.exe");
+        if (File.Exists(inboxCmd))
+        {
+            return inboxCmd;
+        }
+
+        var discovered = ProbeCollector.TryFindCommand("cmd.exe");
+        return string.IsNullOrWhiteSpace(discovered) ? "cmd.exe" : discovered;
+    }
+
+    private static string ReadScriptFile(string scriptPath)
+    {
+        if (!File.Exists(scriptPath))
+        {
+            throw new FileNotFoundException("Script file not found.", scriptPath);
+        }
+
+        using var reader = new StreamReader(
+            scriptPath,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: false),
+            detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
     }
 
     private static async Task<int> RunWslProcessAsync(WslProcessOptions options)

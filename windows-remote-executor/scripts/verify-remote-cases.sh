@@ -160,21 +160,13 @@ fi
 
 status_line "structured PowerShell exec path still works"
 EXEC_LOG="${TMP_DIR}/exec.log"
-if [[ ${ARGV_ONLY} -eq 0 ]]; then
-  "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" <<'EOF'
+if [[ ${ARGV_ONLY} -eq 1 ]]; then
+  status_line "argv-only still allows staged exec bridge"
+fi
+"${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" <<'EOF'
 Write-Output 'structured-exec-ok'
 EOF
-  grep -q 'structured-exec-ok' "${EXEC_LOG}"
-else
-  if "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" 2>&1 <<'EOF'
-Write-Output 'should-not-run'
-EOF
-  then
-    printf 'error: PowerShell exec unexpectedly succeeded in argv-only mode\n' >&2
-    exit 1
-  fi
-  grep -q 'argv-only' "${EXEC_LOG}"
-fi
+grep -q 'structured-exec-ok' "${EXEC_LOG}"
 
 status_line "put/get remote path and filename containing spaces"
 LOCAL_PAYLOAD="${TMP_DIR}/payload with spaces.txt"

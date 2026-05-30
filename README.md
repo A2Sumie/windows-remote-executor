@@ -61,8 +61,8 @@ If an agent opens this repository cold, the shortest safe path is:
 1. Read `AGENTS.md`.
 2. Read `windows-remote-executor/README.md`.
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
-4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, and `update-tools`.
-5. Prefer the MCP server for routine agent use; use `exec --file` only when PowerShell is actually needed.
+4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, `exec`, and `update-tools`.
+5. Prefer the MCP server for routine agent use; use `exec --file` only when script control is actually needed.
 6. Keep long-lived WSL workloads on ext4 paths such as `/home/...`, not `/mnt/*`, and prefer `wsl-capture` plus absolute interpreters for machine decisions.
 
 ## License

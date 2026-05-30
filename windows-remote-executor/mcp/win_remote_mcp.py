@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.11"
+SERVER_VERSION = "0.1.12"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 
@@ -330,8 +330,38 @@ def tool_specs() -> list[dict[str, Any]]:
             },
         },
         {
+            "name": "win_exec",
+            "description": "Run a staged non-argv script body through the native exec bridge without inline shell quoting.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "script": {"type": "string"},
+                    "shell": {"type": "string", "enum": ["powershell", "cmd"]},
+                    "cwd": {"type": "string"},
+                },
+                "required": ["target", "script"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_exec_capture",
+            "description": "Run a staged non-argv script body and return structured stdout/stderr capture.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "script": {"type": "string"},
+                    "shell": {"type": "string", "enum": ["powershell", "cmd"]},
+                    "cwd": {"type": "string"},
+                },
+                "required": ["target", "script"],
+                "additionalProperties": False,
+            },
+        },
+        {
             "name": "win_exec_ps_file",
-            "description": "Run a PowerShell file through the wrapper's controlled UTF-8/base64 path. Blocked when the target policy is commandMode=argv-only.",
+            "description": "Run a PowerShell file through the staged native exec bridge.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -344,7 +374,7 @@ def tool_specs() -> list[dict[str, Any]]:
         },
         {
             "name": "win_exec_ps_script",
-            "description": "Run a PowerShell script body through stdin so the client never needs inline shell quoting. Blocked when the target policy is commandMode=argv-only.",
+            "description": "Run a PowerShell script body through the staged native exec bridge.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -559,11 +589,33 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
             result = run_win_remote(argv)
             return format_result(result, parse_stdout_json=True)
 
+        if name == "win_exec":
+            argv = ["exec", require_str(arguments, "target")]
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            if shell := optional_str(arguments, "shell"):
+                argv.extend(["--shell", shell])
+            argv.append("--stdin")
+            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
+            return format_result(result)
+
+        if name == "win_exec_capture":
+            argv = ["exec-capture", require_str(arguments, "target")]
+            if cwd := optional_str(arguments, "cwd"):
+                argv.extend(["--cwd", cwd])
+            if shell := optional_str(arguments, "shell"):
+                argv.extend(["--shell", shell])
+            argv.append("--stdin")
+            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
+            return format_result(result, parse_stdout_json=True)
+
         if name == "win_exec_ps_file":
             result = run_win_remote(
                 [
                     "exec",
                     require_str(arguments, "target"),
+                    "--shell",
+                    "powershell",
                     "--file",
                     require_str(arguments, "file_path"),
                 ]
@@ -572,7 +624,7 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
 
         if name == "win_exec_ps_script":
             result = run_win_remote(
-                ["exec", require_str(arguments, "target"), "--stdin"],
+                ["exec", require_str(arguments, "target"), "--shell", "powershell", "--stdin"],
                 stdin_text=require_str(arguments, "script"),
             )
             return format_result(result)

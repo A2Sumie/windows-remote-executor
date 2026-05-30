@@ -133,6 +133,8 @@ internal static class ExecutorAccessControl
             "capture-b64" => true,
             "python-b64" => true,
             "powershell-b64" => true,
+            "exec-file-b64" => true,
+            "exec-file-capture-b64" => true,
             "wsl-b64" => true,
             "wsl-capture-b64" => true,
             "wsl-script-b64" => true,
@@ -160,6 +162,8 @@ internal static class ExecutorAccessControl
             case "probe":
             case "guard-sshd":
             case "repair-sshd":
+            case "exec-file-b64":
+            case "exec-file-capture-b64":
             case "everything-b64":
                 return;
 
@@ -171,7 +175,7 @@ internal static class ExecutorAccessControl
             case "wsl-script-capture-b64":
             case "wsl-resident-b64":
                 throw new UnauthorizedAccessException(
-                    $"Command '{command}' is blocked by access-policy commandMode=argv-only. Use run-b64/capture-b64 with an allowed executable and explicit argv.");
+                    $"Command '{command}' is blocked by access-policy commandMode=argv-only. Use run-b64/capture-b64 with an allowed executable and explicit argv, or exec-file-b64 for staged script maintenance.");
 
             default:
                 return;
@@ -195,7 +199,7 @@ internal static class ExecutorAccessControl
         if (IsBlockedInterpreterOrShell(executableName))
         {
             throw new UnauthorizedAccessException(
-                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for '{command}'. Shell, PowerShell, Python, and WSL interpreters are not allowed.");
+                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for '{command}'. Shell, PowerShell, Python, and WSL interpreters are not allowed through run/capture.");
         }
     }
 

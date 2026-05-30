@@ -10,7 +10,7 @@ The intended steady state is:
 
 - direct native process launch, `scp`, and a native C# Windows executor for routine work
 - structured argv/base64 transport instead of quote-sensitive command strings
-- PowerShell only when the task is specifically PowerShell-shaped, and only through the wrapper's UTF-8/base64 path
+- PowerShell or cmd script control only through the wrapper's staged exec bridge
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
 ## What It Does
@@ -18,7 +18,7 @@ The intended steady state is:
 - runs remote native processes without a shell hop
 - captures remote native process output as JSON with detected encodings and raw base64 stdout/stderr bytes
 - runs remote Python scripts, including `conda run`
-- sends PowerShell as UTF-8 base64 and decodes it on Windows before launching PowerShell
+- stages PowerShell/cmd scripts as files before the native executor reads and launches them
 - ships a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
 - launches WSL resident services with verified PID or port readiness instead of leaving callers to guess between `tmux` and `nohup`
 - uploads and downloads files with `scp`
@@ -119,11 +119,12 @@ For agent clients, use the MCP server so the model calls structured tools instea
 python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 ```
 
-Run PowerShell from a local file so the local shell never has to escape it:
+Run PowerShell from a local file so the local shell never has to escape it or inline a base64 payload:
 
 ```bash
 ./windows-remote-executor/bin/win-remote exec winbox --file ./scripts/check-host.ps1
 cat ./scripts/check-host.ps1 | ./windows-remote-executor/bin/win-remote exec winbox --stdin
+./windows-remote-executor/bin/win-remote exec-capture winbox --out ./ps-state.json --stdin < ./scripts/check-host.ps1
 ```
 
 Run native programs and Python without a shell hop:
@@ -186,7 +187,7 @@ Force the Windows-side executor into argv-only command mode:
 ./windows-remote-executor/bin/win-remote policy winbox --command-mode argv-only
 ```
 
-In `argv-only` mode, the native executor rejects `powershell-b64`, `python-b64`, WSL command/script launchers, and `run`/`capture` attempts whose executable is a known shell or interpreter such as `cmd.exe`, `powershell.exe`, `pwsh.exe`, `py.exe`, `python.exe`, `wsl.exe`, `bash.exe`, or `sh.exe`. Use only `run`/`capture` with a concrete native executable and explicit argv. Set `--command-mode standard` to restore the compatibility behavior.
+In `argv-only` mode, the native executor still rejects legacy inline `powershell-b64`, Python helpers, WSL command/script launchers, and `run`/`capture` attempts whose executable is a known shell or interpreter such as `cmd.exe`, `powershell.exe`, `pwsh.exe`, `py.exe`, `python.exe`, `wsl.exe`, `bash.exe`, or `sh.exe`. The staged `exec-file-b64` bridge remains allowed for controlled script maintenance because the SSH command line carries only a short staged path. Set `--command-mode standard` to restore the full compatibility behavior.
 
 Rotate the local token and re-install the policy:
 
@@ -221,7 +222,7 @@ The guard logic is intentionally conservative.
 - `public-with-token` is allowed only when the policy explicitly says so and an access token hash is configured
 - the probe and guard output always surfaces the policy label, exposure mode, command mode, and whether a token is required
 
-When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument. When `commandMode` is `argv-only`, the token is still required but not sufficient for blocked interpreter/shell routes.
+When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument. When `commandMode` is `argv-only`, the token is still required but not sufficient for blocked interpreter/shell routes.
 
 ## Notes
 
@@ -240,7 +241,7 @@ When `access-policy.json` contains an access token hash, native commands such as
 - Prefer `capture` or `wsl-capture` when stdout/stderr may be UTF-16, locale-codepage, binary-adjacent, or otherwise too brittle for plain PTY parsing.
 - On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
-- Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns UTF-8/base64 encoding.
+- Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns staging and native execution.
 - Silent admin commands such as `put`, `get`, `deploy` without `--post`, `update-tools` without `--install-guard`, and `policy --no-run-guard` now print `OK` on success so agent clients do not misread silence as uncertainty.
 - `find` still relies on an externally staged `es.exe`.
-- The PowerShell route is now `local UTF-8 base64 -> WindowsRemoteExecutor.Native.exe powershell-b64 -> Windows-local decode -> PowerShell -EncodedCommand`, which removes one quoting layer from SSH.
+- The PowerShell route is now `local script/file/stdin -> scp staging -> WindowsRemoteExecutor.Native.exe exec-file-b64 -> PowerShell -EncodedCommand`, so the SSH command line carries only a short staged path.

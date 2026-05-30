@@ -47,6 +47,8 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_guard`
 - `win_repair`
 - `win_tasks`
+- `win_exec`
+- `win_exec_capture`
 - `win_exec_ps_file`
 - `win_exec_ps_script`
 
@@ -54,8 +56,8 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 
 - `win_run` and `win_capture` still inherit the wrapper guardrails.
 - Raw `powershell.exe` / `pwsh` transport is blocked by default there.
-- If PowerShell is truly required, use `win_exec_ps_file` or `win_exec_ps_script`.
-- When the remote policy uses `commandMode: "argv-only"`, PowerShell, Python helpers, WSL launchers, and known shells/interpreters are rejected by the Windows-side native executor even if an access token is present.
+- If PowerShell or cmd script control is truly required, use `win_exec` / `win_exec_capture`; the PowerShell-specific tools remain compatibility aliases.
+- When the remote policy uses `commandMode: "argv-only"`, legacy inline PowerShell, Python helpers, WSL launchers, and known shells/interpreters under `run`/`capture` are rejected by the Windows-side native executor even if an access token is present. The staged exec bridge remains allowed for controlled script maintenance.
 
 ## WSL stance
 
@@ -71,4 +73,4 @@ For agent clients, use this MCP server over shelling out to `win-remote` directl
 
 When a workflow cannot be represented by the existing MCP tools, add a native/MCP capability instead of teaching agents another quoting pattern. The purpose of this executor is to make spaces, quotes, Unicode, long scripts, and WSL arguments reliable by construction.
 
-For locked-down hosts, set policy `--command-mode argv-only` and use only `win_run`/`win_capture` with concrete native executables. Do not use `win_py`, `win_exec_ps_*`, `win_wsl*`, or any shell/interpreter executable on those targets.
+For locked-down hosts, set policy `--command-mode argv-only` and prefer `win_run`/`win_capture` with concrete native executables. Use `win_exec` only for explicit script-shaped maintenance; do not use `win_py`, `win_wsl*`, or shell/interpreter executables through `run`/`capture` on those targets.
