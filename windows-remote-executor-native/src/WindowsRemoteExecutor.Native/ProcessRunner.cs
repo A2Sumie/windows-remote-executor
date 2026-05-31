@@ -295,7 +295,14 @@ internal static class ProcessRunner
     private static void StartAndCloseInput(Process process)
     {
         process.Start();
-        process.StandardInput.Close();
+        try
+        {
+            process.StandardInput.Close();
+        }
+        catch (InvalidOperationException)
+        {
+            // The process was started without a redirected stdin; nothing to close.
+        }
     }
 
     private static string QuoteForDisplay(string argument)

@@ -131,6 +131,7 @@ internal static class ExecutorAccessControl
             "probe" => true,
             "run-b64" => true,
             "capture-b64" => true,
+            "spawn-b64" => true,
             "python-b64" => true,
             "powershell-b64" => true,
             "exec-file-b64" => true,
@@ -156,6 +157,7 @@ internal static class ExecutorAccessControl
         {
             case "run-b64":
             case "capture-b64":
+            case "spawn-b64":
                 EnsureProgramAllowedForArgvOnly(command, commandArgs);
                 return;
 
@@ -199,7 +201,7 @@ internal static class ExecutorAccessControl
         if (IsBlockedInterpreterOrShell(executableName))
         {
             throw new UnauthorizedAccessException(
-                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for '{command}'. Shell, PowerShell, Python, and WSL interpreters are not allowed through run/capture.");
+                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for '{command}'. Shell, PowerShell, Python, and WSL interpreters are not allowed through run/capture/spawn.");
         }
     }
 

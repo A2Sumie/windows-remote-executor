@@ -1,3 +1,6 @@
+using Microsoft.Win32.SafeHandles;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text;
 
@@ -42,6 +45,62 @@ internal sealed class RunProcessOptions
         {
             FilePath = filePath,
             WorkingDirectory = workingDirectory,
+            Arguments = processArgs
+        };
+    }
+}
+
+internal sealed class SpawnProcessOptions
+{
+    public string FilePath { get; init; } = string.Empty;
+    public string? WorkingDirectory { get; init; }
+    public string? StdOutPath { get; init; }
+    public string? StdErrPath { get; init; }
+    public IReadOnlyList<string> Arguments { get; init; } = Array.Empty<string>();
+
+    public static SpawnProcessOptions FromBase64Args(string[] args)
+    {
+        var filePath = string.Empty;
+        string? workingDirectory = null;
+        string? stdoutPath = null;
+        string? stderrPath = null;
+        var processArgs = new List<string>();
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--file":
+                    filePath = Base64Args.ReadValue(args, ref i, "--file");
+                    break;
+                case "--cwd":
+                    workingDirectory = Base64Args.ReadValue(args, ref i, "--cwd");
+                    break;
+                case "--stdout":
+                    stdoutPath = Base64Args.ReadValue(args, ref i, "--stdout");
+                    break;
+                case "--stderr":
+                    stderrPath = Base64Args.ReadValue(args, ref i, "--stderr");
+                    break;
+                case "--arg":
+                    processArgs.Add(Base64Args.ReadValue(args, ref i, "--arg"));
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown spawn option: {args[i]}");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new ArgumentException("--file is required.");
+        }
+
+        return new SpawnProcessOptions
+        {
+            FilePath = filePath,
+            WorkingDirectory = workingDirectory,
+            StdOutPath = stdoutPath,
+            StdErrPath = stderrPath,
             Arguments = processArgs
         };
     }
@@ -535,6 +594,22 @@ internal static class ExecutionCommands
         };
         Console.WriteLine(JsonSerializer.Serialize(payload));
         return result.ExitCode;
+    }
+
+    public static int SpawnCommand(string[] args)
+    {
+        var options = SpawnProcessOptions.FromBase64Args(args);
+        var result = WindowsProcessSpawner.Spawn(options);
+        Console.WriteLine(JsonSerializer.Serialize(result));
+        return 0;
+    }
+
+    public static int SpawnDirectCommand(string[] args)
+    {
+        var options = SpawnProcessOptions.FromBase64Args(args);
+        var result = WindowsProcessSpawner.SpawnDirect(options);
+        Console.WriteLine(JsonSerializer.Serialize(result));
+        return 0;
     }
 
     public static async Task<int> RunPythonAsync(string[] args)
@@ -1506,6 +1581,396 @@ internal static class Base64Args
     {
         return Encoding.UTF8.GetString(Convert.FromBase64String(value));
     }
+
+    public static string Encode(string value)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes(value));
+    }
 }
 
 internal sealed record ResolvedExecutable(string FilePath, IReadOnlyList<string> AdditionalArguments);
+
+internal sealed record SpawnProcessResult(
+    int ProcessId,
+    string FilePath,
+    IReadOnlyList<string> Arguments,
+    string? WorkingDirectory,
+    string StdOutPath,
+    string StdErrPath,
+    string StartedAt);
+
+internal static class WindowsProcessSpawner
+{
+    private const uint GenericRead = 0x80000000;
+    private const uint GenericWrite = 0x40000000;
+    private const uint FileShareRead = 0x00000001;
+    private const uint FileShareWrite = 0x00000002;
+    private const uint OpenAlways = 4;
+    private const uint OpenExisting = 3;
+    private const uint FileAttributeNormal = 0x00000080;
+    private const uint StartfUseStdHandles = 0x00000100;
+    private const uint DetachedProcess = 0x00000008;
+    private const uint CreateNewProcessGroup = 0x00000200;
+    private const uint CreateNoWindow = 0x08000000;
+    private const uint CreateBreakawayFromJob = 0x01000000;
+    private const int StdErrorHandle = -12;
+    private const ushort SwHide = 0;
+
+    public static SpawnProcessResult Spawn(SpawnProcessOptions options)
+    {
+        var stdoutPath = string.IsNullOrWhiteSpace(options.StdOutPath) ? "NUL" : options.StdOutPath!;
+        var stderrPath = string.IsNullOrWhiteSpace(options.StdErrPath) ? stdoutPath : options.StdErrPath!;
+        var taskName = $"WinRemoteSpawn-{Guid.NewGuid():N}";
+        var scriptPath = WriteScheduledSpawnScript(options, taskName);
+
+        CreateScheduledTask(taskName, scriptPath);
+        RunScheduledTask(taskName);
+
+        return new SpawnProcessResult(
+            0,
+            options.FilePath,
+            options.Arguments,
+            options.WorkingDirectory,
+            stdoutPath,
+            stderrPath,
+            DateTimeOffset.UtcNow.ToString("O"));
+    }
+
+    public static SpawnProcessResult SpawnDirect(SpawnProcessOptions options)
+    {
+        var stdoutPath = string.IsNullOrWhiteSpace(options.StdOutPath) ? "NUL" : options.StdOutPath!;
+        var stderrPath = string.IsNullOrWhiteSpace(options.StdErrPath) ? stdoutPath : options.StdErrPath!;
+
+        if (!stdoutPath.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureParentDirectory(stdoutPath);
+        }
+        if (!stderrPath.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            EnsureParentDirectory(stderrPath);
+        }
+
+        using var stdin = OpenInheritableHandle("NUL", GenericRead, OpenExisting, append: false);
+        using var stdout = OpenInheritableHandle(stdoutPath, GenericWrite, OpenAlways, append: true);
+        using var stderr = stderrPath.Equals(stdoutPath, StringComparison.OrdinalIgnoreCase)
+            ? DuplicateInheritableHandle(stdout)
+            : OpenInheritableHandle(stderrPath, GenericWrite, OpenAlways, append: true);
+
+        var startupInfo = new STARTUPINFO
+        {
+            cb = Marshal.SizeOf<STARTUPINFO>(),
+            dwFlags = StartfUseStdHandles,
+            wShowWindow = SwHide,
+            hStdInput = stdin.DangerousGetHandle(),
+            hStdOutput = stdout.DangerousGetHandle(),
+            hStdError = stderr.DangerousGetHandle()
+        };
+
+        var processInformation = new PROCESS_INFORMATION();
+        var commandLine = BuildCommandLine(options.FilePath, options.Arguments);
+        var applicationName = Path.IsPathFullyQualified(options.FilePath) ? options.FilePath : null;
+        var success = CreateProcessW(
+            applicationName,
+            new StringBuilder(commandLine),
+            IntPtr.Zero,
+            IntPtr.Zero,
+            bInheritHandles: true,
+            CreateNewProcessGroup | CreateNoWindow,
+            IntPtr.Zero,
+            string.IsNullOrWhiteSpace(options.WorkingDirectory) ? null : options.WorkingDirectory,
+            ref startupInfo,
+            out processInformation);
+
+        if (!success)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error());
+        }
+
+        CloseHandle(processInformation.hThread);
+        CloseHandle(processInformation.hProcess);
+
+        return new SpawnProcessResult(
+            (int)processInformation.dwProcessId,
+            options.FilePath,
+            options.Arguments,
+            options.WorkingDirectory,
+            stdoutPath,
+            stderrPath,
+            DateTimeOffset.UtcNow.ToString("O"));
+    }
+
+    private static string WriteScheduledSpawnScript(SpawnProcessOptions options, string taskName)
+    {
+        var baseDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "WindowsRemoteExecutor",
+            "spawn");
+        Directory.CreateDirectory(baseDirectory);
+        var scriptPath = Path.Combine(baseDirectory, $"{taskName}.cmd");
+        var logPath = Path.Combine(baseDirectory, $"{taskName}.log");
+        var processPath = Environment.ProcessPath
+            ?? throw new InvalidOperationException("Environment.ProcessPath is unavailable.");
+        var command = BuildCommandLine(processPath, BuildSpawnDirectArguments(options));
+
+        var builder = new StringBuilder();
+        builder.AppendLine("@echo off");
+        builder.AppendLine("setlocal");
+        builder.AppendLine($"{command} 1>>{QuoteWindowsArgument(logPath)} 2>>&1");
+        builder.AppendLine($"schtasks.exe /Delete /TN {QuoteWindowsArgument(taskName)} /F >NUL 2>NUL");
+        builder.AppendLine("del \"%~f0\" >NUL 2>NUL");
+        File.WriteAllText(scriptPath, builder.ToString(), Encoding.ASCII);
+        return scriptPath;
+    }
+
+    private static IReadOnlyList<string> BuildSpawnDirectArguments(SpawnProcessOptions options)
+    {
+        var args = new List<string>
+        {
+            "spawn-direct-b64",
+            "--file",
+            Base64Args.Encode(options.FilePath)
+        };
+        if (!string.IsNullOrWhiteSpace(options.WorkingDirectory))
+        {
+            args.Add("--cwd");
+            args.Add(Base64Args.Encode(options.WorkingDirectory!));
+        }
+        if (!string.IsNullOrWhiteSpace(options.StdOutPath))
+        {
+            args.Add("--stdout");
+            args.Add(Base64Args.Encode(options.StdOutPath!));
+        }
+        if (!string.IsNullOrWhiteSpace(options.StdErrPath))
+        {
+            args.Add("--stderr");
+            args.Add(Base64Args.Encode(options.StdErrPath!));
+        }
+        foreach (var argument in options.Arguments)
+        {
+            args.Add("--arg");
+            args.Add(Base64Args.Encode(argument));
+        }
+        return args;
+    }
+
+    private static void CreateScheduledTask(string taskName, string scriptPath)
+    {
+        var runAt = DateTime.Now.AddMinutes(5).ToString("HH:mm");
+        RunToolOrThrow("schtasks.exe", new[]
+        {
+            "/Create",
+            "/F",
+            "/SC",
+            "ONCE",
+            "/ST",
+            runAt,
+            "/TN",
+            taskName,
+            "/TR",
+            $"cmd.exe /d /s /c {QuoteWindowsArgument(scriptPath)}"
+        });
+    }
+
+    private static void RunScheduledTask(string taskName)
+    {
+        RunToolOrThrow("schtasks.exe", new[] { "/Run", "/TN", taskName });
+    }
+
+    private static void RunToolOrThrow(string filePath, IReadOnlyList<string> arguments)
+    {
+        ProcessRunner.RunAsync(filePath, arguments, throwOnFailure: true)
+            .GetAwaiter()
+            .GetResult();
+    }
+
+    private static SafeFileHandle OpenInheritableHandle(string path, uint access, uint creationDisposition, bool append)
+    {
+        EnsureParentDirectory(path);
+        var securityAttributes = new SECURITY_ATTRIBUTES
+        {
+            nLength = Marshal.SizeOf<SECURITY_ATTRIBUTES>(),
+            bInheritHandle = true
+        };
+
+        var handle = CreateFileW(
+            path,
+            access,
+            FileShareRead | FileShareWrite,
+            ref securityAttributes,
+            creationDisposition,
+            FileAttributeNormal,
+            IntPtr.Zero);
+
+        if (handle.IsInvalid)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to open '{path}'.");
+        }
+
+        if (append)
+        {
+            SetFilePointerEx(handle, 0, out _, 2);
+        }
+
+        return handle;
+    }
+
+    private static SafeFileHandle DuplicateInheritableHandle(SafeFileHandle source)
+    {
+        var current = GetCurrentProcess();
+        if (!DuplicateHandle(
+            current,
+            source.DangerousGetHandle(),
+            current,
+            out var target,
+            0,
+            true,
+            2))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to duplicate stderr handle.");
+        }
+        return new SafeFileHandle(target, ownsHandle: true);
+    }
+
+    private static void EnsureParentDirectory(string path)
+    {
+        if (path.Equals("NUL", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+    }
+
+    private static string BuildCommandLine(string filePath, IReadOnlyList<string> arguments)
+    {
+        return string.Join(" ", new[] { QuoteWindowsArgument(filePath) }.Concat(arguments.Select(QuoteWindowsArgument)));
+    }
+
+    private static string QuoteWindowsArgument(string argument)
+    {
+        if (argument.Length == 0)
+        {
+            return "\"\"";
+        }
+
+        if (!argument.Any(ch => char.IsWhiteSpace(ch) || ch == '"'))
+        {
+            return argument;
+        }
+
+        var builder = new StringBuilder();
+        builder.Append('"');
+        var backslashes = 0;
+        foreach (var ch in argument)
+        {
+            if (ch == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+
+            if (ch == '"')
+            {
+                builder.Append('\\', backslashes * 2 + 1);
+                builder.Append('"');
+                backslashes = 0;
+                continue;
+            }
+
+            builder.Append('\\', backslashes);
+            backslashes = 0;
+            builder.Append(ch);
+        }
+
+        builder.Append('\\', backslashes * 2);
+        builder.Append('"');
+        return builder.ToString();
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool CreateProcessW(
+        string? lpApplicationName,
+        StringBuilder lpCommandLine,
+        IntPtr lpProcessAttributes,
+        IntPtr lpThreadAttributes,
+        bool bInheritHandles,
+        uint dwCreationFlags,
+        IntPtr lpEnvironment,
+        string? lpCurrentDirectory,
+        ref STARTUPINFO lpStartupInfo,
+        out PROCESS_INFORMATION lpProcessInformation);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern SafeFileHandle CreateFileW(
+        string lpFileName,
+        uint dwDesiredAccess,
+        uint dwShareMode,
+        ref SECURITY_ATTRIBUTES lpSecurityAttributes,
+        uint dwCreationDisposition,
+        uint dwFlagsAndAttributes,
+        IntPtr hTemplateFile);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetFilePointerEx(SafeFileHandle hFile, long liDistanceToMove, out long lpNewFilePointer, uint dwMoveMethod);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DuplicateHandle(
+        IntPtr hSourceProcessHandle,
+        IntPtr hSourceHandle,
+        IntPtr hTargetProcessHandle,
+        out IntPtr lpTargetHandle,
+        uint dwDesiredAccess,
+        bool bInheritHandle,
+        uint dwOptions);
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SECURITY_ATTRIBUTES
+    {
+        public int nLength;
+        public IntPtr lpSecurityDescriptor;
+        [MarshalAs(UnmanagedType.Bool)]
+        public bool bInheritHandle;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct STARTUPINFO
+    {
+        public int cb;
+        public IntPtr lpReserved;
+        public IntPtr lpDesktop;
+        public IntPtr lpTitle;
+        public uint dwX;
+        public uint dwY;
+        public uint dwXSize;
+        public uint dwYSize;
+        public uint dwXCountChars;
+        public uint dwYCountChars;
+        public uint dwFillAttribute;
+        public uint dwFlags;
+        public ushort wShowWindow;
+        public ushort cbReserved2;
+        public IntPtr lpReserved2;
+        public IntPtr hStdInput;
+        public IntPtr hStdOutput;
+        public IntPtr hStdError;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct PROCESS_INFORMATION
+    {
+        public IntPtr hProcess;
+        public IntPtr hThread;
+        public uint dwProcessId;
+        public uint dwThreadId;
+    }
+}

@@ -41,8 +41,8 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote guard` to validate that `sshd` is still bound safely.
 - Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
 - Use `win-remote tasks` or MCP `win_tasks` when you need scheduled-task state; do not hand-author `Get-ScheduledTaskInfo -TaskName ...` for names with spaces.
-- Use `win-remote exec --file <script.ps1>` or `--stdin` only when PowerShell/cmd script control is specifically required; it stages the payload file before native execution.
-- On `X570`, treat `win-remote cmd` as forbidden unless the operator explicitly asks for a legacy `cmd.exe` builtin.
+- Use `win-remote exec --file <script.ps1>` or `--stdin` when PowerShell/cmd script control is specifically required; it stages the payload file before native execution.
+- Use `win-remote exec --shell cmd` or the compatibility `win-remote cmd` wrapper for cmd-shaped scripts instead of raw SSH command strings.
 - Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's staged exec bridge.
 - `win-remote run` and `win-remote capture` now block raw `powershell.exe` / `pwsh` by default.
 - Silent admin commands such as `put`, `get`, and no-post `deploy` now return `OK` on success so clients do not treat silence as uncertainty.
@@ -57,7 +57,7 @@ Treat raw PowerShell command lines as disallowed.
 - Do not use inline PowerShell as a normal control path.
 - Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
 - Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
-- On `argv-only` hosts, use `exec` only for explicit script maintenance; do not use `py`, `wsl*`, or shell/interpreter executables through `run`/`capture`; the native executor should reject those routes.
+- On `argv-only` hosts, keep shell-shaped work on the staged `exec` bridge and do not use `py`, `wsl*`, or shell/interpreter executables through `run`/`capture`; the native executor should reject those routes.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
 - If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, `win-remote wsl-resident`, or MCP `win_wsl_script` / `win_wsl_resident` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
 - Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.

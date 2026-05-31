@@ -64,6 +64,13 @@ internal static class Program
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.CaptureCommandAsync(commandArgs);
 
+                case "spawn-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return ExecutionCommands.SpawnCommand(commandArgs);
+
+                case "spawn-direct-b64":
+                    return ExecutionCommands.SpawnDirectCommand(commandArgs);
+
                 case "python-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunPythonAsync(commandArgs);
@@ -140,6 +147,7 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe probe
               WindowsRemoteExecutor.Native.exe run-b64 [options]
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
+              WindowsRemoteExecutor.Native.exe spawn-b64 [options]
               WindowsRemoteExecutor.Native.exe python-b64 [options]
               WindowsRemoteExecutor.Native.exe powershell-b64 [options]
               WindowsRemoteExecutor.Native.exe exec-file-b64 [options]
@@ -180,6 +188,13 @@ internal static class Program
             capture-b64 options:
               --file <base64-utf8-path-or-command>
               --cwd <base64-utf8-working-directory>
+              --arg <base64-utf8-argument>
+
+            spawn-b64 options:
+              --file <base64-utf8-path-or-command>
+              --cwd <base64-utf8-working-directory>
+              --stdout <base64-utf8-remote-log-path>
+              --stderr <base64-utf8-remote-log-path>
               --arg <base64-utf8-argument>
 
             python-b64 options:

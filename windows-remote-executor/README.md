@@ -2,7 +2,7 @@
 
 This toolkit lets a macOS or Linux shell drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and a PowerShell fallback that does not depend on fragile local quoting.
 
-For agentic clients, the primary entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not use ad hoc shell command generation as the normal control plane. The shell wrapper exists to resolve targets, stage files, and invoke the native executable; the native executable owns structured argv, base64 payloads, process launch, output capture, WSL bridging, and SSH safety checks.
+For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. The shell wrapper exists to resolve targets, upload payloads, and call the native executable; the native executable is responsible for structured argv, base64 payloads, process launch, output capture, WSL bridging, and SSH safety checks.
 
 This is a hard stability boundary: if a task can be expressed as argv, script body, file upload/download, WSL program, scheduled-task query, or PowerShell file/stdin, use the native/MCP path. Avoid raw `cmd.exe`, raw `powershell.exe`, `wsl.exe ... bash -lc ...`, or hand-built Windows command strings in agent work.
 
@@ -145,7 +145,7 @@ cat ./scripts/check-linux.sh | ./windows-remote-executor/bin/win-remote wsl-sh w
 cat ./scripts/run-server.sh | ./windows-remote-executor/bin/win-remote wsl-resident winbox --cwd /home/sumie/app --log-file /home/sumie/app/logs/server.log --pid-file /home/sumie/app/run/server.pid --port 8023 --stdin
 ```
 
-`wsl-sh` now stages the script through `scp`, copies it into a Linux-native temp path such as `/tmp/...` inside WSL, and executes it there. That avoids Windows command-line length failures and avoids accidentally running the script body straight from `/mnt/c/...`.
+`wsl-sh` stages the script through `scp`, copies it into a Linux-native temp path such as `/tmp/...` inside WSL, and executes it there. That avoids Windows command-line length failures and avoids accidentally running the script body straight from `/mnt/c/...`.
 
 When a foreground WSL command is expected to stay quiet for a while, pass `--heartbeat-seconds <n>` so the executor emits lightweight stderr heartbeats instead of forcing each workspace to invent its own keepalive prints.
 
@@ -181,14 +181,6 @@ Install or refresh the remote access policy and guard:
 ./windows-remote-executor/bin/win-remote repair winbox
 ```
 
-Force the Windows-side executor into argv-only command mode:
-
-```bash
-./windows-remote-executor/bin/win-remote policy winbox --command-mode argv-only
-```
-
-In `argv-only` mode, the native executor still rejects legacy inline `powershell-b64`, Python helpers, WSL command/script launchers, and `run`/`capture` attempts whose executable is a known shell or interpreter such as `cmd.exe`, `powershell.exe`, `pwsh.exe`, `py.exe`, `python.exe`, `wsl.exe`, `bash.exe`, or `sh.exe`. The staged `exec-file-b64` bridge remains allowed for controlled script maintenance because the SSH command line carries only a short staged path. Set `--command-mode standard` to restore the full compatibility behavior.
-
 Rotate the local token and re-install the policy:
 
 ```bash
@@ -220,14 +212,14 @@ The guard logic is intentionally conservative.
 - if `sshd` drifts away from the expected listen address, `guard-sshd` stops the service and changes startup to demand
 - `sshd` is configured with Windows service failure restart actions and a repair watch scheduled task
 - `public-with-token` is allowed only when the policy explicitly says so and an access token hash is configured
-- the probe and guard output always surfaces the policy label, exposure mode, command mode, and whether a token is required
+- the probe and guard output always surfaces the policy label, exposure mode, and whether a token is required
 
-When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument. When `commandMode` is `argv-only`, the token is still required but not sufficient for blocked interpreter/shell routes.
+When `access-policy.json` contains an access token hash, native commands such as `probe`, `run-b64`, `capture-b64`, `spawn-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64` require the matching token. The wrapper automatically forwards `TARGET_ACCESS_TOKEN` as a base64 argument.
 
 ## Notes
 
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
-- For new automation, prefer adding a native subcommand or MCP tool over adding another shell quoting convention. The goal is to make spaces, quotes, non-ASCII text, long scripts, and WSL arguments boring.
+- For new automation, prefer adding a native subcommand or MCP tool over adding another shell quoting convention. The goal is to make spaces, quotes, non-ASCII text, and long scripts boring.
 - `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.
@@ -239,7 +231,8 @@ When `access-policy.json` contains an access token hash, native commands such as
 - Inside WSL, prefer absolute executables for brittle dependencies. For example, use `/usr/lib/wsl/lib/nvidia-smi` for GPU queries and absolute venv interpreters such as `/home/sumie/amt_asr_wsl/.venv-vllm/bin/python` for workload entrypoints.
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` or `wsl-capture` when stdout/stderr may be UTF-16, locale-codepage, binary-adjacent, or otherwise too brittle for plain PTY parsing.
-- On `X570`, treat `win-remote cmd` as unsupported. Prefer direct native executables through `run`.
+- Prefer `spawn` for Windows-side resident/background processes. It sends every argument as UTF-8 base64 to native `spawn-b64`; the native side stages a one-shot scheduled task and then calls `CreateProcessW` from that detached context, with stdout/stderr file handles opened by the bridge. The caller should treat the returned JSON as a launch receipt; `ProcessId` can be `0` when Task Scheduler is used as the launcher.
+- On `X570`, prefer direct native executables through `run` for argv-shaped work. For shell-shaped work, use staged `exec --shell powershell` or `exec --shell cmd`; `win-remote cmd` is a compatibility wrapper over the same staged cmd bridge.
 - Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
 - Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns staging and native execution.
 - Silent admin commands such as `put`, `get`, `deploy` without `--post`, `update-tools` without `--install-guard`, and `policy --no-run-guard` now print `OK` on success so agent clients do not misread silence as uncertainty.

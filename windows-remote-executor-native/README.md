@@ -120,9 +120,10 @@ If you need to revert a host that was already switched to a PowerShell login she
 - The intended steady state is "PowerShell minimized", not "PowerShell everywhere".
 - PowerShell is still available, but it is expected to arrive through the wrapper's staged exec bridge before PowerShell starts.
 - Raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport are outside the supported path.
-- On `X570`, `cmd.exe` is also outside the supported steady-state control path. Prefer direct native executables through `run-b64`.
+- On `X570`, prefer direct native executables through `run-b64` for argv-shaped work. For shell-shaped work, use the staged exec-file bridge rather than raw shell command strings.
 - `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.
 - `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
+- `spawn-b64` is for Windows resident/background processes. It stages a short one-shot scheduled task, then uses `CreateProcessW` with explicit inheritable file handles for stdout/stderr from that detached context, so background launches do not keep SSH sessions open and callers do not pass through PowerShell `Start-Process` quoting.
 - `wsl-b64` is normally reached through `win-remote wsl`, and `wsl-script-b64` is normally reached through `win-remote wsl-sh`.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `WindowsRemoteExecutor.cmd` is the stable launcher path; versioned native payloads can live under `C:\CodexRemote\tools\releases\...`.

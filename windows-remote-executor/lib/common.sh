@@ -191,6 +191,7 @@ scp_raw() {
 scp_remote_spec() {
   local remote_path
   remote_path="$(normalize_remote_path "$1")"
+  [[ "${remote_path}" != *" "* ]] || die "Remote paths with spaces are not supported by scp wrapper: ${remote_path}"
   printf "%s@%s:%s" "${TARGET_USER}" "${TARGET_HOST}" "${remote_path}"
 }
 
@@ -200,7 +201,7 @@ ensure_remote_dir() {
   local remote_dir_cmd
   remote_dir_cmd="$(remote_cmd_path "${remote_dir}")"
   ssh_raw "${TARGET_USER}@${TARGET_HOST}" \
-    "cmd.exe /d /s /c \"if not exist \"${remote_dir_cmd}\" mkdir \"${remote_dir_cmd}\"\"" \
+    "cmd.exe /d /s /c \"if not exist ${remote_dir_cmd} mkdir ${remote_dir_cmd}\"" \
     >/dev/null
 }
 

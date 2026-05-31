@@ -22,7 +22,7 @@ Use `windows-remote-executor/bin/win-remote` for manual debugging, deployment, a
 - Use `wsl`, `wsl-capture`, or `wsl-sh` for Linux-side execution inside WSL.
 - `wsl-sh` now stages scripts through file transfer and runs them from a Linux temp path, so `--file` and `--stdin` are safe for longer scripts.
 - Use `capture` when output may be UTF-16, locale-codepage, or binary-shaped and you need stable JSON plus raw bytes.
-- On `X570`, do not use `win-remote cmd` as part of the normal control path.
+- Use `win-remote exec --shell cmd` or the compatibility `win-remote cmd` wrapper for cmd-shaped scripts instead of raw SSH command strings.
 - Treat PowerShell as fallback only.
 - If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's staged exec bridge.
 - `run` and `capture` now reject raw `powershell.exe` / `pwsh` by default.

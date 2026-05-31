@@ -16,6 +16,7 @@ Usage:
   win-remote cmd <target> <cmd-code>
   win-remote run <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]
   win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
+  win-remote spawn <target> [--cwd <remote-dir>] [--stdout <remote-log>] [--stderr <remote-log>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
   win-remote wsl <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--heartbeat-seconds <n>] <program> [args...]
   win-remote wsl-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] [--heartbeat-seconds <n>] <program> [args...]
   win-remote wsl-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
@@ -187,16 +188,16 @@ install_guard_tasks() {
   local_script="$(mktemp)"
   cat >"${local_script}" <<EOF
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 set "WINDOWS_REMOTE_EXECUTOR_PRIMARY=$(remote_cmd_path "${TARGET_NATIVE_LAUNCHER}")"
 set "WINDOWS_REMOTE_EXECUTOR_FALLBACK=$(remote_cmd_path "${TARGET_NATIVE_EXE}")"
 if exist "%WINDOWS_REMOTE_EXECUTOR_PRIMARY%" (
   call "%WINDOWS_REMOTE_EXECUTOR_PRIMARY%" guard-sshd --expected-listen-address ${expected_listen_address} --log-path "$(remote_cmd_path "${TARGET_GUARD_LOG_PATH}")"
-  exit /b %ERRORLEVEL%
+  exit /b !ERRORLEVEL!
 )
 if exist "%WINDOWS_REMOTE_EXECUTOR_FALLBACK%" (
   "%WINDOWS_REMOTE_EXECUTOR_FALLBACK%" guard-sshd --expected-listen-address ${expected_listen_address} --log-path "$(remote_cmd_path "${TARGET_GUARD_LOG_PATH}")"
-  exit /b %ERRORLEVEL%
+  exit /b !ERRORLEVEL!
 )
 echo error: WindowsRemoteExecutor native payload not found. 1>&2
 exit /b 127
@@ -291,13 +292,6 @@ guard_raw_powershell_program() {
   fi
 }
 
-guard_argv_only_route() {
-  local route="$1"
-  if [[ "${TARGET_COMMAND_MODE}" == "argv-only" ]]; then
-    die "${route} is blocked because TARGET_COMMAND_MODE=argv-only. Use win-remote run/capture with a concrete native executable and explicit argv."
-  fi
-}
-
 print_ok() {
   printf 'OK\n'
 }
@@ -335,7 +329,7 @@ build_native_invoke_body() {
   for token in "$@"; do
     code+=" $(cmd_quote "${token}")"
   done
-  code+=" & if errorlevel 1 exit /b 1"
+  code+=" & exit /b !ERRORLEVEL!"
   printf '%s' "${code}"
 }
 
@@ -474,7 +468,7 @@ cleanup_remote_dir_best_effort() {
   remote_dir="$(normalize_remote_path "$1")"
   local remote_dir_cmd
   remote_dir_cmd="$(remote_cmd_path "${remote_dir}")"
-  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist \"${remote_dir_cmd}\" rmdir /s /q \"${remote_dir_cmd}\"\"" >/dev/null 2>&1 || true
+  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist ${remote_dir_cmd} rmdir /s /q ${remote_dir_cmd}\"" >/dev/null 2>&1 || true
 }
 
 cleanup_wsl_stage_best_effort() {
@@ -623,18 +617,16 @@ render_native_launcher() {
 
   cat <<EOF
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 set "WINDOWS_REMOTE_EXECUTOR_PRIMARY=$(remote_cmd_path "${primary_path}")"
 set "WINDOWS_REMOTE_EXECUTOR_FALLBACK=$(remote_cmd_path "${fallback_path}")"
 if exist "%WINDOWS_REMOTE_EXECUTOR_PRIMARY%" (
   "%WINDOWS_REMOTE_EXECUTOR_PRIMARY%" %*
-  if errorlevel 1 exit /b 1
-  exit /b 0
+  exit /b !ERRORLEVEL!
 )
 if exist "%WINDOWS_REMOTE_EXECUTOR_FALLBACK%" (
   "%WINDOWS_REMOTE_EXECUTOR_FALLBACK%" %*
-  if errorlevel 1 exit /b 1
-  exit /b 0
+  exit /b !ERRORLEVEL!
 )
 echo error: WindowsRemoteExecutor native payload not found. 1>&2
 exit /b 127
@@ -663,7 +655,7 @@ ssh_exec_native_tokens() {
     code="if exist \"${launcher_path_cmd}\" (${launcher_body}) else (${fallback_cmd})"
   fi
 
-  ssh_exec_cmd "${code}"
+  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /v:on /d /s /c \"${code} & exit /b !ERRORLEVEL!\""
 }
 
 scp_to_remote() {
@@ -903,6 +895,94 @@ cmd_capture() {
   return "${capture_status}"
 }
 
+cmd_spawn() {
+  [[ $# -ge 2 ]] || die "spawn requires <target> [--cwd <remote-dir>] [--stdout <remote-log>] [--stderr <remote-log>] [--out <local-json-file>] [--allow-powershell] <program> [args...]"
+  local target="$1"
+  shift
+
+  local cwd=""
+  local stdout_path=""
+  local stderr_path=""
+  local out_file=""
+  local allow_powershell=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a directory"
+        cwd="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --stdout)
+        [[ $# -ge 2 ]] || die "--stdout requires a remote log path"
+        stdout_path="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --stderr)
+        [[ $# -ge 2 ]] || die "--stderr requires a remote log path"
+        stderr_path="$(normalize_remote_path "$2")"
+        shift 2
+        ;;
+      --out)
+        [[ $# -ge 2 ]] || die "--out requires a local file path"
+        out_file="$2"
+        shift 2
+        ;;
+      --allow-powershell)
+        allow_powershell=1
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [[ $# -ge 1 ]] || die "spawn requires a program"
+
+  load_target "${target}"
+
+  local program="$1"
+  shift
+  guard_raw_powershell_program "spawn" "${allow_powershell}" "${program}"
+
+  local -a native_tokens=("spawn-b64" "--file" "$(encode_utf8_b64 "${program}")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${stdout_path}" ]]; then
+    native_tokens+=("--stdout" "$(encode_utf8_b64 "${stdout_path}")")
+  fi
+  if [[ -n "${stderr_path}" ]]; then
+    native_tokens+=("--stderr" "$(encode_utf8_b64 "${stderr_path}")")
+  fi
+
+  local arg
+  for arg in "$@"; do
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+  done
+
+  local spawn_output=""
+  local spawn_status=0
+  if spawn_output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    spawn_status=0
+  else
+    spawn_status=$?
+  fi
+
+  if [[ -n "${out_file}" ]]; then
+    mkdir -p "$(dirname "${out_file}")"
+    printf '%s\n' "${spawn_output}" | tee "${out_file}"
+  else
+    printf '%s\n' "${spawn_output}"
+  fi
+
+  return "${spawn_status}"
+}
+
 print_capture_output() {
   local capture_output="$1"
   local out_file="${2:-}"
@@ -961,7 +1041,6 @@ cmd_wsl() {
   [[ $# -ge 1 ]] || die "wsl requires a Linux program path"
 
   load_target "${target}"
-  guard_argv_only_route "wsl"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
 
@@ -1061,7 +1140,6 @@ cmd_wsl_capture() {
   [[ $# -ge 1 ]] || die "wsl-capture requires a Linux program path"
 
   load_target "${target}"
-  guard_argv_only_route "wsl-capture"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
 
@@ -1174,7 +1252,6 @@ cmd_wsl_sh() {
   done
 
   load_target "${target}"
-  guard_argv_only_route "wsl-sh"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
@@ -1337,7 +1414,6 @@ cmd_wsl_sh_capture() {
   done
 
   load_target "${target}"
-  guard_argv_only_route "wsl-sh-capture"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
@@ -1548,7 +1624,6 @@ cmd_wsl_resident() {
   done
 
   load_target "${target}"
-  guard_argv_only_route "wsl-resident"
   [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
   [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
   [[ -n "${shell_path}" ]] || shell_path="${TARGET_WSL_SHELL}"
@@ -1713,7 +1788,6 @@ cmd_py() {
   done
 
   load_target "${target}"
-  guard_argv_only_route "py"
 
   local -a native_tokens=("python-b64" "--script" "$(encode_utf8_b64 "${script_path}")")
   if [[ -n "${cwd}" ]]; then
@@ -1920,18 +1994,20 @@ cmd_repair() {
 }
 
 sync_policy_to_current_release() {
-  local local_policy_file="${1:-}"
-  [[ -f "${local_policy_file}" ]] || return 0
-
-  local current_release_file_cmd
-  current_release_file_cmd="$(remote_cmd_path "${TARGET_NATIVE_CURRENT_FILE}")"
-  local current_release=""
-  current_release="$(ssh_exec_cmd "if exist \"${current_release_file_cmd}\" type \"${current_release_file_cmd}\"" | tr -d '\r' | sed -n '1p')"
-  [[ -n "${current_release}" ]] || return 0
-
-  current_release="$(normalize_remote_path "${current_release}")"
-  ensure_remote_dir "${current_release}"
-  scp_to_remote "${local_policy_file}" "${current_release}/access-policy.json"
+  local ps_script
+  ps_script="$(cat <<EOF
+\$ErrorActionPreference = 'Stop'
+\$policyPath = '$(remote_cmd_path "${TARGET_POLICY_PATH}")'
+\$currentReleaseFile = '$(remote_cmd_path "${TARGET_NATIVE_CURRENT_FILE}")'
+if (-not (Test-Path -LiteralPath \$policyPath)) { return }
+if (-not (Test-Path -LiteralPath \$currentReleaseFile)) { return }
+\$currentRelease = (Get-Content -LiteralPath \$currentReleaseFile -Raw).Trim()
+if ([string]::IsNullOrWhiteSpace(\$currentRelease)) { return }
+New-Item -ItemType Directory -Path \$currentRelease -Force | Out-Null
+Copy-Item -LiteralPath \$policyPath -Destination (Join-Path \$currentRelease 'access-policy.json') -Force
+EOF
+)"
+  ssh_exec_powershell "${ps_script}" >/dev/null
 }
 
 cmd_tasks() {
@@ -2173,8 +2249,8 @@ cmd_policy() {
 
   ensure_remote_parent "${TARGET_POLICY_PATH}"
   scp_to_remote "${policy_file}" "${TARGET_POLICY_PATH}"
-  sync_policy_to_current_release "${policy_file}"
   rm -f "${policy_file}"
+  sync_policy_to_current_release
 
   if [[ ${install_guard} -eq 1 ]]; then
     install_guard_tasks "${expected_listen_address}"
@@ -2596,6 +2672,9 @@ main() {
       ;;
     capture)
       cmd_capture "$@"
+      ;;
+    spawn)
+      cmd_spawn "$@"
       ;;
     wsl)
       cmd_wsl "$@"
