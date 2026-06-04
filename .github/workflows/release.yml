@@ -21,6 +21,18 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Static Verification
+        run: |
+          set -euo pipefail
+          bash -n windows-remote-executor/bin/win-remote
+          bash -n windows-remote-executor/lib/common.sh
+          bash -n windows-remote-executor/scripts/verify-remote-cases.sh
+          python3 -m py_compile windows-remote-executor/mcp/win_remote_mcp.py
+          dotnet build windows-remote-executor-native/src/WindowsRemoteExecutor.Native/WindowsRemoteExecutor.Native.csproj \
+            -c Release \
+            -r win-x64 \
+            --self-contained false
+
       - name: Publish Framework-Dependent Build
         run: ./windows-remote-executor-native/publish-fdd-win-x64.sh
 

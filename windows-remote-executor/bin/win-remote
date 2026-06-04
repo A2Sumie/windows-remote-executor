@@ -19,8 +19,12 @@ Usage:
   win-remote spawn <target> [--cwd <remote-dir>] [--stdout <remote-log>] [--stderr <remote-log>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
   win-remote wsl <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--heartbeat-seconds <n>] <program> [args...]
   win-remote wsl-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] [--heartbeat-seconds <n>] <program> [args...]
+  win-remote wsl-py <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--python <linux-python>] [--heartbeat-seconds <n>] [--module <module> | <script-path>] [-- <script-args...>]
+  win-remote wsl-py-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--python <linux-python>] [--out <local-json-file>] [--heartbeat-seconds <n>] [--module <module> | <script-path>] [-- <script-args...>]
   win-remote wsl-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
   win-remote wsl-sh-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-container-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] --container <name> [--container-runtime <docker|podman|path>] [--container-cwd <dir>] [--container-user <user>] [--container-shell <shell>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-container-sh-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] --container <name> [--container-runtime <docker|podman|path>] [--container-cwd <dir>] [--container-user <user>] [--container-shell <shell>] [--out <local-json-file>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
   win-remote wsl-resident <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--pid-file <linux-path>] [--log-file <linux-path>] [--port <n>] [--health-url <url>] [--ready-timeout <seconds>] [--settle-delay <seconds>] [--poll-interval-ms <n>] [--diag-lines <n>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
   win-remote py <target> <remote-script-path> [--cwd <remote-dir>] [--python <remote-python>] [--conda-env <name> | --conda-prefix <prefix>] [-- <script-args...>]
   win-remote find <target> <query> [--max <count>]
@@ -29,7 +33,7 @@ Usage:
   win-remote repair <target> [--out <local-json-file>] [--expected-listen-address <ip>] [--force-rewrite]
   win-remote tasks <target> [--task-name <name>]... [--prefix <text>] [--out <local-json-file>]
   win-remote policy <target> [--mode <private-only|public-with-token>] [--command-mode <standard|argv-only>] [--expected-listen-address <ip>] [--label <text>] [--token <plain-token> | --rotate-token] [--skip-guard-install] [--no-run-guard]
-  win-remote update-tools <target> [--native-dir <local-dir> | --native-exe <local-exe>] [--everything-dll <local-dll>] [--es-exe <local-es>] [--policy-file <local-json>] [--install-guard]
+  win-remote update-tools <target> [--native-dir <local-dir> | --native-exe <local-exe> | --native-zip <release-asset.zip>] [--everything-dll <local-dll>] [--es-exe <local-es>] [--policy-file <local-json>] [--install-guard]
   win-remote put <target> <local-path> <remote-path>
   win-remote get <target> <remote-path> <local-path>
   win-remote deploy <target> <local-dir> <remote-dir> [--post <powershell-code> | --post-file <local-ps1> | --post-stdin]
@@ -401,8 +405,10 @@ heartbeat_loop() {
 child_pid="$!"
 heartbeat_loop "${child_pid}" "${heartbeat_seconds}" &
 heartbeat_pid="$!"
+set +e
 wait "${child_pid}"
 status="$?"
+set -e
 kill "${heartbeat_pid}" 2>/dev/null || true
 wait "${heartbeat_pid}" 2>/dev/null || true
 exit "${status}"
@@ -455,8 +461,93 @@ heartbeat_loop() {
 child_pid="$!"
 heartbeat_loop "${child_pid}" "${heartbeat_seconds}" &
 heartbeat_pid="$!"
+set +e
 wait "${child_pid}"
 status="$?"
+set -e
+kill "${heartbeat_pid}" 2>/dev/null || true
+wait "${heartbeat_pid}" 2>/dev/null || true
+exit "${status}"
+EOF
+}
+
+render_wsl_container_stage_bootstrap() {
+  local heartbeat_seconds="${1:-0}"
+
+  if [[ "${heartbeat_seconds}" == "0" ]]; then
+    cat <<'EOF'
+set -euo pipefail
+src="$1"
+dst="$2"
+runtime="$3"
+container="$4"
+container_shell="$5"
+container_cwd="$6"
+container_user="$7"
+shift 7
+cleanup() {
+  rm -f "$dst"
+}
+trap cleanup EXIT
+cp "$src" "$dst"
+chmod 600 "$dst"
+container_args=(exec -i)
+if [[ -n "$container_cwd" ]]; then
+  container_args+=(--workdir "$container_cwd")
+fi
+if [[ -n "$container_user" ]]; then
+  container_args+=(--user "$container_user")
+fi
+container_args+=("$container" "$container_shell" -s --)
+"$runtime" "${container_args[@]}" "$@" <"$dst"
+EOF
+    return
+  fi
+
+  cat <<'EOF'
+set -euo pipefail
+src="$1"
+dst="$2"
+runtime="$3"
+container="$4"
+container_shell="$5"
+container_cwd="$6"
+container_user="$7"
+heartbeat_seconds="$8"
+shift 8
+cleanup() {
+  rm -f "$dst"
+}
+trap cleanup EXIT
+cp "$src" "$dst"
+chmod 600 "$dst"
+container_args=(exec -i)
+if [[ -n "$container_cwd" ]]; then
+  container_args+=(--workdir "$container_cwd")
+fi
+if [[ -n "$container_user" ]]; then
+  container_args+=(--user "$container_user")
+fi
+container_args+=("$container" "$container_shell" -s --)
+run_container() {
+  "$runtime" "${container_args[@]}" "$@" <"$dst"
+}
+heartbeat_loop() {
+  local child_pid="$1"
+  local interval="$2"
+  while kill -0 "${child_pid}" 2>/dev/null; do
+    printf '[win-remote] container heartbeat pid=%s container=%s utc=%s\n' "${child_pid}" "${container}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
+    sleep "${interval}"
+  done
+}
+run_container "$@" &
+child_pid="$!"
+heartbeat_loop "${child_pid}" "${heartbeat_seconds}" &
+heartbeat_pid="$!"
+set +e
+wait "${child_pid}"
+status="$?"
+set -e
 kill "${heartbeat_pid}" 2>/dev/null || true
 wait "${heartbeat_pid}" 2>/dev/null || true
 exit "${status}"
@@ -466,9 +557,13 @@ EOF
 cleanup_remote_dir_best_effort() {
   local remote_dir
   remote_dir="$(normalize_remote_path "$1")"
+  if ssh_exec_native_tokens "delete-tree-b64" "--path" "$(encode_utf8_b64 "${remote_dir}")" >/dev/null 2>&1; then
+    return
+  fi
+
   local remote_dir_cmd
   remote_dir_cmd="$(remote_cmd_path "${remote_dir}")"
-  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist ${remote_dir_cmd} rmdir /s /q ${remote_dir_cmd}\"" >/dev/null 2>&1 || true
+  ssh_raw "${TARGET_USER}@${TARGET_HOST}" "cmd.exe /d /s /c \"if exist \"\"${remote_dir_cmd}\"\" rmdir /s /q \"\"${remote_dir_cmd}\"\"\"" >/dev/null 2>&1 || true
 }
 
 cleanup_wsl_stage_best_effort() {
@@ -661,13 +756,88 @@ ssh_exec_native_tokens() {
 scp_to_remote() {
   local local_path="$1"
   local remote_path="$2"
+  remote_path="$(normalize_remote_path "${remote_path}")"
+  if remote_path_requires_staged_transfer "${remote_path}"; then
+    [[ -f "${local_path}" ]] || die "Staged upload only supports files: ${local_path}"
+    staged_file_upload "${local_path}" "${remote_path}"
+    return
+  fi
+
   scp_raw "${local_path}" "$(scp_remote_spec "${remote_path}")"
 }
 
 scp_from_remote() {
   local remote_path="$1"
   local local_path="$2"
+  remote_path="$(normalize_remote_path "${remote_path}")"
+  if remote_path_requires_staged_transfer "${remote_path}"; then
+    staged_file_download "${remote_path}" "${local_path}"
+    return
+  fi
+
   scp_raw "$(scp_remote_spec "${remote_path}")" "${local_path}"
+}
+
+remote_path_requires_staged_transfer() {
+  local remote_path="$1"
+  [[ "${remote_path}" =~ [[:space:]\'\"\`\&\(\)\;\|\<\>\^\!] ]]
+}
+
+staged_file_upload() {
+  local local_path="$1"
+  local remote_path="$2"
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/file-transfer-${stage_id}"
+  local remote_stage_path="${remote_stage_dir}/payload"
+
+  ensure_remote_dir "${remote_stage_dir}"
+  scp_raw "${local_path}" "$(scp_remote_spec "${remote_stage_path}")"
+
+  local status=0
+  if ssh_exec_native_tokens \
+    "copy-file-b64" \
+    "--source" "$(encode_utf8_b64 "${remote_stage_path}")" \
+    "--destination" "$(encode_utf8_b64 "${remote_path}")" >/dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+
+  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  return "${status}"
+}
+
+staged_file_download() {
+  local remote_path="$1"
+  local local_path="$2"
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/file-transfer-${stage_id}"
+  local remote_stage_path="${remote_stage_dir}/payload"
+
+  ensure_remote_dir "${remote_stage_dir}"
+
+  local status=0
+  if ssh_exec_native_tokens \
+    "copy-file-b64" \
+    "--source" "$(encode_utf8_b64 "${remote_path}")" \
+    "--destination" "$(encode_utf8_b64 "${remote_stage_path}")" >/dev/null; then
+    :
+  else
+    status=$?
+    cleanup_remote_dir_best_effort "${remote_stage_dir}"
+    return "${status}"
+  fi
+
+  if scp_raw "$(scp_remote_spec "${remote_stage_path}")" "${local_path}"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  cleanup_remote_dir_best_effort "${remote_stage_dir}"
+  return "${status}"
 }
 
 cmd_exec() {
@@ -1207,6 +1377,148 @@ cmd_wsl_capture() {
   return "${capture_status}"
 }
 
+cmd_wsl_py_common() {
+  local mode="$1"
+  shift
+  [[ $# -ge 2 ]] || die "${mode} requires <target> [options] [--module <module> | <script-path>] [-- <script-args...>]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  local python_path="python3"
+  local module_name=""
+  local out_file=""
+  local heartbeat_seconds=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --python)
+        [[ $# -ge 2 ]] || die "--python requires a Linux Python executable path"
+        python_path="$2"
+        shift 2
+        ;;
+      --module)
+        [[ $# -ge 2 ]] || die "--module requires a Python module name"
+        module_name="$2"
+        shift 2
+        ;;
+      --out)
+        [[ "${mode}" == "wsl-py-capture" ]] || die "--out is only valid for wsl-py-capture"
+        [[ $# -ge 2 ]] || die "--out requires a local JSON file path"
+        out_file="$2"
+        shift 2
+        ;;
+      --heartbeat-seconds)
+        [[ $# -ge 2 ]] || die "--heartbeat-seconds requires a positive integer"
+        validate_positive_integer "$2" "--heartbeat-seconds"
+        heartbeat_seconds="$2"
+        shift 2
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  local -a python_args=()
+  if [[ -n "${module_name}" ]]; then
+    python_args+=("-m" "${module_name}")
+  else
+    [[ $# -ge 1 ]] || die "${mode} requires a script path unless --module is provided"
+    python_args+=("$1")
+    shift
+  fi
+  if [[ "${1:-}" == "--" ]]; then
+    shift
+  fi
+  python_args+=("$@")
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+
+  local native_command="wsl-b64"
+  if [[ "${mode}" == "wsl-py-capture" ]]; then
+    native_command="wsl-capture-b64"
+  fi
+
+  local -a native_tokens=()
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    local heartbeat_script
+    heartbeat_script="$(render_wsl_heartbeat_wrapper)"
+    native_command="wsl-script-b64"
+    if [[ "${mode}" == "wsl-py-capture" ]]; then
+      native_command="wsl-script-capture-b64"
+    fi
+    native_tokens=("${native_command}" "--script" "$(encode_utf8_b64 "${heartbeat_script}")" "--shell" "$(encode_utf8_b64 "/bin/bash")")
+  else
+    native_tokens=("${native_command}" "--file" "$(encode_utf8_b64 "${python_path}")")
+  fi
+
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${heartbeat_seconds}")")
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${python_path}")")
+  fi
+
+  local arg
+  for arg in "${python_args[@]}"; do
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+  done
+
+  local output=""
+  local status=0
+  if output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  if [[ "${mode}" == "wsl-py-capture" ]]; then
+    print_capture_output "${output}" "${out_file}"
+  else
+    printf '%s\n' "${output}"
+  fi
+  return "${status}"
+}
+
+cmd_wsl_py() {
+  cmd_wsl_py_common "wsl-py" "$@"
+}
+
+cmd_wsl_py_capture() {
+  cmd_wsl_py_common "wsl-py-capture" "$@"
+}
+
 cmd_wsl_sh() {
   [[ $# -ge 2 ]] || die "wsl-sh requires <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--heartbeat-seconds <n>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
   local target="$1"
@@ -1525,6 +1837,219 @@ cmd_wsl_sh_capture() {
 
   print_capture_output "${capture_output}" "${out_file}"
   return "${capture_status}"
+}
+
+cmd_wsl_container_sh_common() {
+  local mode="$1"
+  shift
+  [[ $# -ge 2 ]] || die "${mode} requires <target> [options] --container <name> [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]"
+  local target="$1"
+  shift
+
+  local distro=""
+  local linux_user=""
+  local cwd=""
+  local out_file=""
+  local heartbeat_seconds=0
+  local container=""
+  local container_runtime="docker"
+  local container_cwd=""
+  local container_user=""
+  local container_shell="/bin/sh"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --distro)
+        [[ $# -ge 2 ]] || die "--distro requires a distribution name"
+        distro="$2"
+        shift 2
+        ;;
+      --user)
+        [[ $# -ge 2 ]] || die "--user requires a Linux user name"
+        linux_user="$2"
+        shift 2
+        ;;
+      --cwd)
+        [[ $# -ge 2 ]] || die "--cwd requires a Linux directory"
+        cwd="$2"
+        shift 2
+        ;;
+      --out)
+        [[ "${mode}" == "wsl-container-sh-capture" ]] || die "--out is only valid for wsl-container-sh-capture"
+        [[ $# -ge 2 ]] || die "--out requires a local JSON file path"
+        out_file="$2"
+        shift 2
+        ;;
+      --heartbeat-seconds)
+        [[ $# -ge 2 ]] || die "--heartbeat-seconds requires a positive integer"
+        validate_positive_integer "$2" "--heartbeat-seconds"
+        heartbeat_seconds="$2"
+        shift 2
+        ;;
+      --container)
+        [[ $# -ge 2 ]] || die "--container requires a container name or id"
+        container="$2"
+        shift 2
+        ;;
+      --container-runtime)
+        [[ $# -ge 2 ]] || die "--container-runtime requires docker, podman, or an executable path"
+        container_runtime="$2"
+        shift 2
+        ;;
+      --container-cwd)
+        [[ $# -ge 2 ]] || die "--container-cwd requires a container working directory"
+        container_cwd="$2"
+        shift 2
+        ;;
+      --container-user)
+        [[ $# -ge 2 ]] || die "--container-user requires a container user"
+        container_user="$2"
+        shift 2
+        ;;
+      --container-shell)
+        [[ $# -ge 2 ]] || die "--container-shell requires a shell path inside the container"
+        container_shell="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  [[ -n "${container}" ]] || die "${mode} requires --container <name>"
+
+  load_target "${target}"
+  [[ -n "${distro}" ]] || distro="${TARGET_WSL_DISTRO}"
+  [[ -n "${linux_user}" ]] || linux_user="${TARGET_WSL_USER}"
+
+  local source_mode="${1:-}"
+  local local_script_path=""
+  local cleanup_local_script=0
+  local -a script_args=()
+  case "${source_mode}" in
+    --file)
+      [[ $# -ge 2 ]] || die "${mode} --file requires a local file path"
+      [[ -f "$2" ]] || die "Local file not found: $2"
+      local_script_path="$2"
+      shift 2
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      ;;
+    --stdin)
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
+      shift
+      if [[ "${1:-}" == "--" ]]; then
+        shift
+      fi
+      cat >"${local_script_path}"
+      ;;
+    *)
+      local -a inline_parts=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --)
+            shift
+            break
+            ;;
+          *)
+            inline_parts+=("$1")
+            shift
+            ;;
+        esac
+      done
+      [[ ${#inline_parts[@]} -gt 0 ]] || die "${mode} requires inline shell, --file <local-sh>, or --stdin"
+      local_script_path="$(mktemp)"
+      cleanup_local_script=1
+      printf '%s' "${inline_parts[*]}" >"${local_script_path}"
+      ;;
+  esac
+  script_args=("$@")
+
+  local stage_id
+  stage_id="$(generate_stage_id)"
+  local remote_stage_dir="${TARGET_STAGE_ROOT}/wsl-container-${stage_id}"
+  local remote_stage_path="${remote_stage_dir}/payload.sh"
+  local stage_wsl_path
+  stage_wsl_path="$(remote_windows_path_to_wsl "${remote_stage_path}")"
+  local linux_temp_path="/tmp/windows-remote-executor-container-${stage_id}.sh"
+  local bootstrap_script
+  bootstrap_script="$(render_wsl_container_stage_bootstrap "${heartbeat_seconds}")"
+
+  local setup_status=0
+  if ensure_remote_dir "${remote_stage_dir}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+  if scp_to_remote "${local_script_path}" "${remote_stage_path}"; then
+    :
+  else
+    setup_status=$?
+    cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+    return "${setup_status}"
+  fi
+
+  local native_command="wsl-script-b64"
+  if [[ "${mode}" == "wsl-container-sh-capture" ]]; then
+    native_command="wsl-script-capture-b64"
+  fi
+
+  local -a native_tokens=("${native_command}" "--script" "$(encode_utf8_b64 "${bootstrap_script}")" "--shell" "$(encode_utf8_b64 "/bin/bash")")
+  if [[ -n "${cwd}" ]]; then
+    native_tokens+=("--cwd" "$(encode_utf8_b64 "${cwd}")")
+  fi
+  if [[ -n "${distro}" ]]; then
+    native_tokens+=("--distribution" "$(encode_utf8_b64 "${distro}")")
+  fi
+  if [[ -n "${linux_user}" ]]; then
+    native_tokens+=("--user" "$(encode_utf8_b64 "${linux_user}")")
+  fi
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${stage_wsl_path}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${linux_temp_path}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${container_runtime}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${container}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${container_shell}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${container_cwd}")")
+  native_tokens+=("--arg" "$(encode_utf8_b64 "${container_user}")")
+  if [[ "${heartbeat_seconds}" != "0" ]]; then
+    native_tokens+=("--arg" "$(encode_utf8_b64 "${heartbeat_seconds}")")
+  fi
+
+  if [[ ${#script_args[@]} -gt 0 ]]; then
+    local arg
+    for arg in "${script_args[@]}"; do
+      native_tokens+=("--arg" "$(encode_utf8_b64 "${arg}")")
+    done
+  fi
+
+  local output=""
+  local status=0
+  if output="$(ssh_exec_native_tokens "${native_tokens[@]}")"; then
+    status=0
+  else
+    status=$?
+  fi
+
+  cleanup_wsl_stage_best_effort "${cleanup_local_script}" "${local_script_path}" "${remote_stage_dir}"
+
+  if [[ "${mode}" == "wsl-container-sh-capture" ]]; then
+    print_capture_output "${output}" "${out_file}"
+  else
+    printf '%s\n' "${output}"
+  fi
+  return "${status}"
+}
+
+cmd_wsl_container_sh() {
+  cmd_wsl_container_sh_common "wsl-container-sh" "$@"
+}
+
+cmd_wsl_container_sh_capture() {
+  cmd_wsl_container_sh_common "wsl-container-sh-capture" "$@"
 }
 
 cmd_wsl_resident() {
@@ -2272,7 +2797,9 @@ cmd_put() {
   remote_path="$(normalize_remote_path "$3")"
 
   [[ -e "${local_path}" ]] || die "Local path not found: ${local_path}"
-  ensure_remote_parent "${remote_path}"
+  if ! remote_path_requires_staged_transfer "${remote_path}"; then
+    ensure_remote_parent "${remote_path}"
+  fi
   scp_to_remote "${local_path}" "${remote_path}"
   print_ok
 }
@@ -2433,6 +2960,8 @@ cmd_update_tools() {
   shift
   local native_dir=""
   local native_exe=""
+  local native_zip=""
+  local native_zip_tmp=""
   local everything_dll=""
   local es_exe=""
   local policy_file=""
@@ -2449,6 +2978,11 @@ cmd_update_tools() {
       --native-exe)
         [[ $# -ge 2 ]] || die "--native-exe requires a file path"
         native_exe="$2"
+        shift 2
+        ;;
+      --native-zip)
+        [[ $# -ge 2 ]] || die "--native-zip requires a local release asset zip"
+        native_zip="$2"
         shift 2
         ;;
       --everything-dll)
@@ -2478,8 +3012,20 @@ cmd_update_tools() {
 
   load_target "${target}"
 
-  if [[ -n "${native_dir}" && -n "${native_exe}" ]]; then
-    die "--native-dir and --native-exe are mutually exclusive"
+  local native_source_count=0
+  [[ -n "${native_dir}" ]] && native_source_count=$((native_source_count + 1))
+  [[ -n "${native_exe}" ]] && native_source_count=$((native_source_count + 1))
+  [[ -n "${native_zip}" ]] && native_source_count=$((native_source_count + 1))
+  if (( native_source_count > 1 )); then
+    die "--native-dir, --native-exe, and --native-zip are mutually exclusive"
+  fi
+
+  if [[ -n "${native_zip}" ]]; then
+    [[ -f "${native_zip}" ]] || die "Local native release zip not found: ${native_zip}"
+    require_cmd unzip
+    native_zip_tmp="$(mktemp -d)"
+    unzip -q "${native_zip}" -d "${native_zip_tmp}"
+    native_dir="${native_zip_tmp}"
   fi
 
   if [[ -z "${native_dir}" && -z "${native_exe}" ]]; then
@@ -2642,10 +3188,12 @@ EOF
 
   if [[ ${install_guard} -eq 1 ]]; then
     install_guard_tasks "${expected_listen_address}"
+    cleanup_exec_source_best_effort "${native_zip_tmp}"
     cmd_guard "${target}"
     return
   fi
 
+  cleanup_exec_source_best_effort "${native_zip_tmp}"
   print_ok
 }
 
@@ -2682,11 +3230,23 @@ main() {
     wsl-capture)
       cmd_wsl_capture "$@"
       ;;
+    wsl-py)
+      cmd_wsl_py "$@"
+      ;;
+    wsl-py-capture)
+      cmd_wsl_py_capture "$@"
+      ;;
     wsl-sh)
       cmd_wsl_sh "$@"
       ;;
     wsl-sh-capture)
       cmd_wsl_sh_capture "$@"
+      ;;
+    wsl-container-sh)
+      cmd_wsl_container_sh "$@"
+      ;;
+    wsl-container-sh-capture)
+      cmd_wsl_container_sh_capture "$@"
       ;;
     wsl-resident)
       cmd_wsl_resident "$@"

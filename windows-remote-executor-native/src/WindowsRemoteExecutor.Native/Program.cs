@@ -71,6 +71,18 @@ internal static class Program
                 case "spawn-direct-b64":
                     return ExecutionCommands.SpawnDirectCommand(commandArgs);
 
+                case "mkdir-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return FileCommands.EnsureDirectory(commandArgs);
+
+                case "delete-tree-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return FileCommands.DeleteTree(commandArgs);
+
+                case "copy-file-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return FileCommands.CopyFile(commandArgs);
+
                 case "python-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
                     return await ExecutionCommands.RunPythonAsync(commandArgs);
@@ -148,6 +160,9 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe run-b64 [options]
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
               WindowsRemoteExecutor.Native.exe spawn-b64 [options]
+              WindowsRemoteExecutor.Native.exe mkdir-b64 [options]
+              WindowsRemoteExecutor.Native.exe delete-tree-b64 [options]
+              WindowsRemoteExecutor.Native.exe copy-file-b64 [options]
               WindowsRemoteExecutor.Native.exe python-b64 [options]
               WindowsRemoteExecutor.Native.exe powershell-b64 [options]
               WindowsRemoteExecutor.Native.exe exec-file-b64 [options]
@@ -196,6 +211,13 @@ internal static class Program
               --stdout <base64-utf8-remote-log-path>
               --stderr <base64-utf8-remote-log-path>
               --arg <base64-utf8-argument>
+
+            mkdir-b64 / delete-tree-b64 options:
+              --path <base64-utf8-windows-path>
+
+            copy-file-b64 options:
+              --source <base64-utf8-windows-source-path>
+              --destination <base64-utf8-windows-destination-path>
 
             python-b64 options:
               --script <base64-utf8-script-path>

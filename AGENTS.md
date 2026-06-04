@@ -12,6 +12,8 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Windows native executor: `windows-remote-executor-native`
 - Default stance: SSH on a private address, access policy enabled, PowerShell minimized
 - Stability boundary: do not hand-compose Windows command lines when structured argv or the staged exec bridge can express the operation.
+- Source boundary: this repository is the single source tree. In the parent workspace, `windows-remote-executor/` and `windows-remote-executor-native/` may be symlinks into this repo; do not recreate parallel source copies.
+- Deployment boundary: remote executor deployments must come from GitHub release assets after a tag/release, not from an ad hoc local build, unless the task is explicitly a local development smoke test.
 
 ## First Steps
 
@@ -27,14 +29,15 @@ Use this repository to operate a Windows host from macOS or Linux through the pr
 - Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
 - Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
 - Use `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, `win-remote wsl-resident`, or MCP `win_wsl*` for Linux-side work inside WSL.
+- Use `win-remote wsl-py`, `win-remote wsl-py-capture`, or MCP `win_wsl_py*` for Python work inside WSL venv/conda/model environments. Pass the Python executable, module/script, cwd, and args explicitly; do not encode Python calls through nested shell strings.
 - `win-remote wsl-sh` now stages local scripts through file transfer and executes them from WSL ext4 temp space, so it avoids Windows command-line length failures.
 - Use `--heartbeat-seconds` on long quiet foreground WSL commands before adding fake progress lines to the app itself.
 - Use `wsl-resident` when the goal is a durable WSL service and you want executor-side PID or port verification plus log diagnostics.
 - Use `win-remote capture` when output encoding is unknown, localized, UTF-16-shaped, or byte-sensitive and you need stable JSON plus raw base64 bytes.
 - Use `win-remote py` for Python scripts on the Windows host.
 - Use `win-remote put` and `win-remote get` for file transfer.
-- Use `win-remote deploy` for staged directory updates.
-- Use `win-remote update-tools` to publish a new Windows-side executor release without overwriting an in-use `.exe`.
+- Use `win-remote deploy` for application staged directory updates.
+- Use `win-remote update-tools --native-zip <release-asset.zip>` when updating the remote executor itself. Publish the GitHub release first, download the release artifact, then deploy that artifact.
 - If existing tools cannot represent a workflow, add a C# native subcommand or MCP tool before inventing another shell quoting convention.
 - Use `win-remote policy` to install or rotate `access-policy.json`.
 - Use `win-remote policy --command-mode argv-only` when the host must reject legacy inline PowerShell, Python helper, WSL launcher routes, and shell/interpreter executables under `run`/`capture`.
@@ -60,6 +63,7 @@ Treat raw PowerShell command lines as disallowed.
 - On `argv-only` hosts, keep shell-shaped work on the staged `exec` bridge and do not use `py`, `wsl*`, or shell/interpreter executables through `run`/`capture`; the native executor should reject those routes.
 - If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
 - If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, `win-remote wsl-resident`, or MCP `win_wsl_script` / `win_wsl_resident` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
+- If the goal is WSL Python execution, prefer `wsl-py` / `wsl-py-capture` with absolute Python executables such as `/home/.../.venv/bin/python`.
 - Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
 - Keep long-lived models, caches, and active code on WSL ext4 such as `/home/...`, not on `/mnt/*`.
 - When a WSL workload depends on a specific interpreter or GPU tool, prefer absolute paths such as `/home/.../.venv/bin/python` and `/usr/lib/wsl/lib/nvidia-smi`.
@@ -89,14 +93,16 @@ After making changes, verify with at least:
 2. one `win-remote run <target> ...` smoke test
 3. `win-remote guard <target>` if networking or policy changed
 4. one PowerShell path through `exec --file` or `exec --stdin` only if your change touched PowerShell behavior
+5. `scripts/verify-remote-cases.sh <target>` before release deployment when the target is available
 
 ## Git Rule
 
 - Do not commit real `targets/*.env` files other than `example.env`.
 - Do not commit real access tokens, hostnames, Tailscale IPs, usernames, SSH public keys, logs, or publish output.
+- Do not commit parent-workspace symlink replacements as copied source trees.
 - Prefer framework-dependent `.NET 8` publish when the Windows host already has `.NET 8` runtime installed.
 - Use self-contained publish only when the host cannot satisfy the runtime requirement.
-- For releases, push a version tag and let GitHub Actions build the assets.
+- For releases, push a version tag and let GitHub Actions build the assets. Deploy those release assets to remote hosts.
 
 ## Minimal Workflow
 

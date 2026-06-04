@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.13"
+SERVER_VERSION = "0.1.14"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 
@@ -192,6 +192,46 @@ def tool_specs() -> list[dict[str, Any]]:
                     "heartbeat_seconds": {"type": "integer", "minimum": 1},
                 },
                 "required": ["target", "program"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl_py",
+            "description": "Run a Python script or module inside WSL with explicit Python executable, cwd, and argv.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "python": {"type": "string"},
+                    "script_path": {"type": "string"},
+                    "module": {"type": "string"},
+                    "script_args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                    "heartbeat_seconds": {"type": "integer", "minimum": 1},
+                },
+                "required": ["target"],
+                "additionalProperties": False,
+            },
+        },
+        {
+            "name": "win_wsl_py_capture",
+            "description": "Run a Python script or module inside WSL and return structured stdout/stderr capture.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "python": {"type": "string"},
+                    "script_path": {"type": "string"},
+                    "module": {"type": "string"},
+                    "script_args": {"type": "array", "items": {"type": "string"}},
+                    "cwd": {"type": "string"},
+                    "distribution": {"type": "string"},
+                    "user": {"type": "string"},
+                    "heartbeat_seconds": {"type": "integer", "minimum": 1},
+                },
+                "required": ["target"],
                 "additionalProperties": False,
             },
         },
@@ -466,6 +506,16 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
             result = run_win_remote(argv)
             return format_result(result, parse_stdout_json=True)
 
+        if name == "win_wsl_py":
+            argv = build_wsl_py_argv("wsl-py", arguments)
+            result = run_win_remote(argv)
+            return format_result(result)
+
+        if name == "win_wsl_py_capture":
+            argv = build_wsl_py_argv("wsl-py-capture", arguments)
+            result = run_win_remote(argv)
+            return format_result(result, parse_stdout_json=True)
+
         if name == "win_wsl_script":
             argv = ["wsl-sh", require_str(arguments, "target")]
             if distribution := optional_str(arguments, "distribution"):
@@ -649,6 +699,35 @@ def run_win_remote(argv: list[str], stdin_text: str | None = None) -> CommandRes
         stdout=completed.stdout,
         stderr=completed.stderr,
     )
+
+
+def build_wsl_py_argv(command: str, arguments: dict[str, Any]) -> list[str]:
+    module = optional_str(arguments, "module")
+    script_path = optional_str(arguments, "script_path")
+    if bool(module) == bool(script_path):
+        raise ValueError("Provide exactly one of 'module' or 'script_path'.")
+
+    argv = [command, require_str(arguments, "target")]
+    if distribution := optional_str(arguments, "distribution"):
+        argv.extend(["--distro", distribution])
+    if user := optional_str(arguments, "user"):
+        argv.extend(["--user", user])
+    if cwd := optional_str(arguments, "cwd"):
+        argv.extend(["--cwd", cwd])
+    if python := optional_str(arguments, "python"):
+        argv.extend(["--python", python])
+    if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
+        argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
+    if module:
+        argv.extend(["--module", module])
+    else:
+        argv.append(script_path or "")
+
+    script_args = optional_str_list(arguments, "script_args")
+    if script_args:
+        argv.append("--")
+        argv.extend(script_args)
+    return argv
 
 
 def format_result(result: CommandResult, parse_stdout_json: bool = False) -> dict[str, Any]:

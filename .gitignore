@@ -4,7 +4,12 @@ __pycache__/
 
 windows-remote-executor/targets/*.env
 !windows-remote-executor/targets/example.env
+windows-remote-executor/RETRY_X570.md
+windows-remote-executor/scripts/x570-*.sh
 
 windows-remote-executor-native/publish/
 windows-remote-executor-native/src/WindowsRemoteExecutor.Native/bin/
 windows-remote-executor-native/src/WindowsRemoteExecutor.Native/obj/
+windows-remote-executor-native/third_party/everything-cli/es.exe
+windows-remote-executor-native/third_party/everything-cli/*.zip
+windows-remote-executor-native/third_party/everything-sdk/*.zip

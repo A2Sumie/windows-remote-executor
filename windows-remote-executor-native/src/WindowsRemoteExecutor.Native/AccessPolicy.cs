@@ -132,6 +132,9 @@ internal static class ExecutorAccessControl
             "run-b64" => true,
             "capture-b64" => true,
             "spawn-b64" => true,
+            "mkdir-b64" => true,
+            "delete-tree-b64" => true,
+            "copy-file-b64" => true,
             "python-b64" => true,
             "powershell-b64" => true,
             "exec-file-b64" => true,
@@ -164,6 +167,9 @@ internal static class ExecutorAccessControl
             case "probe":
             case "guard-sshd":
             case "repair-sshd":
+            case "mkdir-b64":
+            case "delete-tree-b64":
+            case "copy-file-b64":
             case "exec-file-b64":
             case "exec-file-capture-b64":
             case "everything-b64":

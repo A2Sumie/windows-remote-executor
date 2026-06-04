@@ -177,6 +177,14 @@ REMOTE_PAYLOAD="${REMOTE_CASE_ROOT}/payload with spaces.txt"
 "${WIN_REMOTE}" get "${TARGET}" "${REMOTE_PAYLOAD}" "${ROUNDTRIP_PAYLOAD}" >/dev/null
 cmp "${LOCAL_PAYLOAD}" "${ROUNDTRIP_PAYLOAD}"
 
+status_line "put/get remote path containing shell metacharacters"
+REMOTE_WEIRD_NAME='literal `tick` (semi; amp&) bang! caret^.txt'
+REMOTE_WEIRD_PAYLOAD="${REMOTE_CASE_ROOT}/${REMOTE_WEIRD_NAME}"
+ROUNDTRIP_WEIRD_PAYLOAD="${TMP_DIR}/roundtrip weird payload.txt"
+"${WIN_REMOTE}" put "${TARGET}" "${LOCAL_PAYLOAD}" "${REMOTE_WEIRD_PAYLOAD}" >/dev/null
+"${WIN_REMOTE}" get "${TARGET}" "${REMOTE_WEIRD_PAYLOAD}" "${ROUNDTRIP_WEIRD_PAYLOAD}" >/dev/null
+cmp "${LOCAL_PAYLOAD}" "${ROUNDTRIP_WEIRD_PAYLOAD}"
+
 if [[ ${ARGV_ONLY} -eq 0 ]]; then
   status_line "python script path, cwd, and argv with spaces/quotes/unicode"
   REMOTE_SCRIPT="${REMOTE_CASE_ROOT}/script dir/echo args with spaces.py"
@@ -261,6 +269,58 @@ EOF
   assert_json_contains "${WSL_JSON}" "stdoutText" "<alpha beta>"
   assert_json_contains "${WSL_JSON}" "stdoutText" '<quote"ok>'
   assert_json_contains "${WSL_JSON}" "stdoutText" "<unicode-値>"
+
+  WSL_PY_PROBE_JSON="${TMP_DIR}/wsl-python-probe.json"
+  if "${WIN_REMOTE}" wsl-sh-capture "${TARGET}" --out "${WSL_PY_PROBE_JSON}" --stdin >/dev/null <<'EOF'
+set -eu
+command -v python3 || command -v python
+EOF
+  then
+    WSL_PYTHON_PATH="$(json_get "${WSL_PY_PROBE_JSON}" "stdoutText")"
+    WSL_PYTHON_PATH="${WSL_PYTHON_PATH%%$'\n'*}"
+    WSL_PY_SCRIPT="/tmp/win-remote-wsl-py-${RANDOM}-$$.py"
+    WSL_PY_CREATE_JSON="${TMP_DIR}/wsl-python-create.json"
+    "${WIN_REMOTE}" wsl-sh-capture "${TARGET}" --out "${WSL_PY_CREATE_JSON}" --stdin -- "${WSL_PY_SCRIPT}" >/dev/null <<'EOF'
+set -eu
+cat >"$1" <<'PY'
+import json
+import os
+import sys
+
+print(json.dumps({"argv": sys.argv[1:], "cwd": os.getcwd()}, ensure_ascii=False))
+PY
+chmod 700 "$1"
+EOF
+    assert_json_eq "${WSL_PY_CREATE_JSON}" "exitCode" "0"
+
+    status_line "optional WSL Python argv capture"
+    WSL_PY_JSON="${TMP_DIR}/wsl-python.json"
+    "${WIN_REMOTE}" wsl-py-capture "${TARGET}" --out "${WSL_PY_JSON}" --python "${WSL_PYTHON_PATH}" --cwd /tmp "${WSL_PY_SCRIPT}" -- \
+      "alpha beta" \
+      'quote"ok' \
+      'unicode-値' >/dev/null
+    assert_json_eq "${WSL_PY_JSON}" "exitCode" "0"
+    python3 - "${WSL_PY_JSON}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8-sig") as f:
+    capture = json.load(f)
+
+payload = json.loads(capture["stdoutText"])
+expected = ["alpha beta", 'quote"ok', "unicode-値"]
+if payload["argv"] != expected:
+    raise SystemExit(f"argv mismatch: {payload['argv']!r}")
+if payload["cwd"] != "/tmp":
+    raise SystemExit(f"cwd mismatch: {payload['cwd']!r}")
+PY
+    "${WIN_REMOTE}" wsl-sh-capture "${TARGET}" --out "${TMP_DIR}/wsl-python-cleanup.json" --stdin -- "${WSL_PY_SCRIPT}" >/dev/null <<'EOF'
+set -eu
+rm -f "$1"
+EOF
+  else
+    status_line "WSL Python unavailable on target; skipping wsl-py case"
+  fi
   else
     status_line "WSL unavailable or blocked on target; skipping WSL-specific case"
   fi

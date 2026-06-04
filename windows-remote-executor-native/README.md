@@ -13,6 +13,9 @@ The current native CLI exposes:
 - `probe`
 - `run-b64`
 - `capture-b64`
+- `mkdir-b64`
+- `delete-tree-b64`
+- `copy-file-b64`
 - `python-b64`
 - `powershell-b64`
 - `exec-file-b64`
@@ -32,6 +35,8 @@ The current native CLI exposes:
 `probe` returns machine state plus the active exposure policy label, listen addresses, and whether an access token is required.
 
 `run-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, and the WSL commands execute payloads without depending on local shell quoting on the controlling machine. `exec-file-b64` is the preferred script bridge because the script body arrives as a staged file, not as a large base64 argv token.
+
+`mkdir-b64`, `delete-tree-b64`, and `copy-file-b64` are path-safe file operations used by the wrapper for paths that would be brittle over `scp` or `cmd.exe` parsing, such as paths with spaces, quotes, or shell metacharacters.
 
 `wsl-b64` and `wsl-capture-b64` run Linux programs through `wsl.exe --exec` with structured distro/user/cwd arguments.
 
@@ -62,7 +67,7 @@ Use it when output may be UTF-16, locale-codepage, or byte-sensitive and you wan
 - `accessTokenSha256`
 - `updatedAt`
 
-If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64`.
+If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `mkdir-b64`, `delete-tree-b64`, `copy-file-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64`.
 
 `public-with-token` is only valid when a token hash exists. The intended default is still `private-only`.
 

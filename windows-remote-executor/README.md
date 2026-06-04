@@ -20,6 +20,7 @@ The intended steady state is:
 - runs remote Python scripts, including `conda run`
 - stages PowerShell/cmd scripts as files before the native executor reads and launches them
 - ships a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
+- runs WSL Python scripts/modules through explicit Python executable, cwd, and argv so venv/conda/model environments do not need nested activation strings
 - launches WSL resident services with verified PID or port readiness instead of leaving callers to guess between `tmux` and `nohup`
 - uploads and downloads files with `scp`
 - collects a JSON probe from the target host
@@ -140,12 +141,16 @@ Run Linux programs and shell scripts inside WSL without composing `wsl.exe ... b
 ./windows-remote-executor/bin/win-remote wsl winbox --cwd /tmp /usr/bin/whoami
 ./windows-remote-executor/bin/win-remote wsl-capture winbox --out ./wsl-uname.json /usr/bin/uname -a
 ./windows-remote-executor/bin/win-remote wsl-capture winbox --heartbeat-seconds 10 /usr/bin/python3 -c 'import time; time.sleep(30); print("done")'
+./windows-remote-executor/bin/win-remote wsl-py-capture winbox --cwd /home/sumie/app --python /home/sumie/app/.venv/bin/python --out ./py-version.json --module platform
+./windows-remote-executor/bin/win-remote wsl-py winbox --cwd /home/sumie/app --python /home/sumie/app/.venv/bin/python scripts/task.py -- --input data.json
 ./windows-remote-executor/bin/win-remote wsl-sh winbox --cwd /tmp --file ./scripts/check-linux.sh -- --flag alpha
 cat ./scripts/check-linux.sh | ./windows-remote-executor/bin/win-remote wsl-sh winbox --stdin -- --flag alpha
 cat ./scripts/run-server.sh | ./windows-remote-executor/bin/win-remote wsl-resident winbox --cwd /home/sumie/app --log-file /home/sumie/app/logs/server.log --pid-file /home/sumie/app/run/server.pid --port 8023 --stdin
 ```
 
 `wsl-sh` stages the script through `scp`, copies it into a Linux-native temp path such as `/tmp/...` inside WSL, and executes it there. That avoids Windows command-line length failures and avoids accidentally running the script body straight from `/mnt/c/...`.
+
+For WSL Python work, prefer `wsl-py` / `wsl-py-capture` over shell activation chains. Pass an absolute interpreter such as `/home/.../.venv/bin/python`, a Linux cwd, a module or script path, and script args after `--`. This keeps Python environment selection explicit and avoids multi-layer quoting around `source`, `conda activate`, `python -c`, and backticks.
 
 When a foreground WSL command is expected to stay quiet for a while, pass `--heartbeat-seconds <n>` so the executor emits lightweight stderr heartbeats instead of forcing each workspace to invent its own keepalive prints.
 
@@ -187,11 +192,14 @@ Rotate the local token and re-install the policy:
 ./windows-remote-executor/bin/win-remote policy winbox --rotate-token
 ```
 
-Hot-update the remote tool directory:
+Hot-update the remote tool directory from a release asset:
 
 ```bash
-./windows-remote-executor/bin/win-remote update-tools winbox
+gh release download vX.Y.Z -p 'windows-remote-executor-native-vX.Y.Z-fdd-win-x64.zip' -D /tmp/wre-release
+./windows-remote-executor/bin/win-remote update-tools winbox --native-zip /tmp/wre-release/windows-remote-executor-native-vX.Y.Z-fdd-win-x64.zip
 ```
+
+Local publish directories are for development verification. Remote executor updates should use GitHub release assets unless the operator explicitly asks for a local smoke deployment.
 
 Inspect scheduled tasks without hand-writing PowerShell quoting:
 
@@ -224,11 +232,13 @@ When `access-policy.json` contains an access token hash, native commands such as
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.
 - Use `wsl`, `wsl-capture`, `wsl-sh`, and `wsl-resident` for Linux-side work inside WSL. They avoid the common `wsl.exe ... bash -lc ...` and `/mnt/c/...` quoting failures.
+- Use `wsl-py` and `wsl-py-capture` for WSL Python venv/conda/model environments. Prefer absolute Python paths and argv over activation strings.
 - Use `--heartbeat-seconds` on long quiet foreground WSL commands before resorting to dummy app-layer logging.
 - `wsl.exe` under `run` is still fine for Windows-side WSL administration such as `--install`, `--set-default-version`, and `--shutdown`, but not for Linux-side workload launch.
 - Keep long-lived models, caches, virtualenvs, and hot code on the WSL ext4 filesystem such as `/home/...`, not under `/mnt/c` or `/mnt/d`, or load times will collapse.
 - If you update Windows-side files for a WSL workload, explicitly copy them into the WSL ext4 working tree before you trust the result. A changed `D:/...` tree does not automatically mean `/home/...` is updated.
 - Inside WSL, prefer absolute executables for brittle dependencies. For example, use `/usr/lib/wsl/lib/nvidia-smi` for GPU queries and absolute venv interpreters such as `/home/sumie/amt_asr_wsl/.venv-vllm/bin/python` for workload entrypoints.
+- Do not turn WSL Python work into nested `bash -lc`, command substitution, or backtick-heavy inline Python when `wsl-py` can carry the same operation as argv.
 - Prefer `run` for human-facing command execution and progress logs.
 - Prefer `capture` or `wsl-capture` when stdout/stderr may be UTF-16, locale-codepage, binary-adjacent, or otherwise too brittle for plain PTY parsing.
 - Prefer `spawn` for Windows-side resident/background processes. It sends every argument as UTF-8 base64 to native `spawn-b64`; the native side stages a one-shot scheduled task and then calls `CreateProcessW` from that detached context, with stdout/stderr file handles opened by the bridge. The caller should treat the returned JSON as a launch receipt; `ProcessId` can be `0` when Task Scheduler is used as the launcher.

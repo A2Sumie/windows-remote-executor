@@ -5,6 +5,8 @@ Windows Remote Executor is a two-part toolkit for operating Windows hosts from m
 - `windows-remote-executor/` is the local shell wrapper
 - `windows-remote-executor-native/` is the Windows-side native executor
 
+In the parent `livestr` workspace, the legacy top-level paths may be symlinks into this repository. Keep this as the single source tree; do not maintain a second copy.
+
 The design goal is simple: keep SSH as the transport, keep PowerShell as a reluctant fallback, and prefer a dropped native executable plus file transfer over brittle inline script transport. That reduces local quoting failures, keeps the control plane easier to reason about, and narrows the amount of PowerShell/AMSI-shaped surface used during normal automation.
 
 For agentic clients, the preferred control plane is now the structured MCP server in `windows-remote-executor/MCP.md`, not ad hoc shell command generation.
@@ -15,6 +17,7 @@ For agentic clients, the preferred control plane is now the structured MCP serve
 - structured capture for localized or byte-sensitive process output
 - staged PowerShell/cmd script bridge for cases that are not naturally argv-shaped
 - structured WSL program and script execution so Linux-side work does not need `wsl.exe ... bash -lc ...`
+- explicit WSL Python execution for venv/conda/model environments without nested shell activation strings
 - staged WSL script transfer so longer shell payloads do not hit Windows command-line length limits
 - a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
 - structured scheduled-task inspection so task names with spaces do not need handwritten PowerShell quoting
@@ -45,6 +48,8 @@ Start with the framework-dependent publish unless you specifically need drop-and
 
 The current framework-dependent build targets `.NET 8` on Windows.
 
+Remote executor deployments should use GitHub release assets. Local publish outputs are for development verification; after changes are verified, tag the repository, let GitHub Actions build the release, and update the remote host from that release artifact.
+
 ## Agent Template
 
 This repository also ships agent-facing entrypoints that are meant to be discovered directly by tooling:
@@ -63,7 +68,7 @@ If an agent opens this repository cold, the shortest safe path is:
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
 4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, `exec`, and `update-tools`.
 5. Prefer the MCP server for routine agent use; use `exec --file` only when script control is actually needed.
-6. Keep long-lived WSL workloads on ext4 paths such as `/home/...`, not `/mnt/*`, and prefer `wsl-capture` plus absolute interpreters for machine decisions.
+6. Keep long-lived WSL workloads on ext4 paths such as `/home/...`, not `/mnt/*`, and prefer `wsl-py-capture` / `wsl-capture` plus absolute interpreters for machine decisions.
 
 ## License
 
