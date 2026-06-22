@@ -813,9 +813,9 @@ invoke_exec_file_compat_bridge() {
       fi
       native_tokens+=(
         "--arg" "$(encode_utf8_b64 "/d")"
-        "--arg" "$(encode_utf8_b64 "/s")"
         "--arg" "$(encode_utf8_b64 "/c")"
-        "--arg" "$(encode_utf8_b64 "call \"${remote_stage_path_cmd}\"")"
+        "--arg" "$(encode_utf8_b64 "call")"
+        "--arg" "$(encode_utf8_b64 "${remote_stage_path_cmd}")"
       )
       ;;
     *)
@@ -958,13 +958,17 @@ copy_remote_file_compat() {
 
   local ps_script
   ps_script="$(cat <<EOF
+\$ErrorActionPreference = 'Stop'
 \$source = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${source_b64}'))
 \$destination = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${destination_b64}'))
 \$parent = [System.IO.Path]::GetDirectoryName(\$destination)
 if (-not [string]::IsNullOrWhiteSpace(\$parent)) {
   New-Item -ItemType Directory -Path \$parent -Force | Out-Null
 }
-Copy-Item -LiteralPath \$source -Destination \$destination -Force
+Copy-Item -LiteralPath \$source -Destination \$destination -Force -ErrorAction Stop
+if (-not [System.IO.File]::Exists(\$destination)) {
+  throw "Copy-Item completed but destination file is missing: \$destination"
+}
 EOF
 )"
 
@@ -3349,7 +3353,11 @@ cmd_update_tools() {
   for local_path in "${local_files[@]}"; do
     local base_name
     base_name="$(basename "${local_path}")"
-    copy_remote_file_bridge "${stage_payload_dir}/${base_name}" "${release_dir}/${base_name}" >/dev/null
+    local release_file_path="${release_dir}/${base_name}"
+    local release_file_path_cmd
+    release_file_path_cmd="$(remote_cmd_path "${release_file_path}")"
+    copy_remote_file_bridge "${stage_payload_dir}/${base_name}" "${release_file_path}" >/dev/null
+    ssh_exec_cmd "if not exist \"${release_file_path_cmd}\" (echo error: staged file was not copied to release directory: ${base_name} 1>&2 & exit /b 66)"
   done
 
   ssh_exec_cmd "if not exist \"${release_dir_cmd}\\WindowsRemoteExecutor.Native.exe\" (echo error: staged native exe was not copied to release directory. 1>&2 & exit /b 66)"
