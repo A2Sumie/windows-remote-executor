@@ -56,9 +56,11 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 
 ## PowerShell stance
 
-- `win_run` and `win_capture` still inherit the wrapper guardrails.
-- Raw `powershell.exe` / `pwsh` transport is blocked by default there.
-- If PowerShell or cmd script control is truly required, use `win_exec` / `win_exec_capture`; the PowerShell-specific tools remain compatibility aliases.
+- `win_run` and `win_capture` inherit the wrapper guardrails.
+- Raw `powershell.exe` / `pwsh` through those argv routes hits the default guard unless the caller explicitly enables the wrapper escape hatch.
+- If PowerShell or cmd script control is the lower-error route, use `win_exec` / `win_exec_capture`; the PowerShell-specific tools remain compatibility aliases.
+- The wrapper checks target native support before staged exec and staged file copy. Older targets that do not advertise `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64` use a structured compatibility path and emit a warning on stderr.
+- Remote Windows paths should be passed with forward slashes or as quoted backslash strings. Drive-relative shapes such as `D:folderfile.py` are rejected before remote execution.
 
 ## WSL stance
 

@@ -48,7 +48,11 @@ decode_utf8_b64() {
 }
 
 normalize_remote_path() {
-  local input="${1//\\//}"
+  local input="$1"
+  if [[ "${input}" =~ ^[A-Za-z]:($|[^/\\]) ]]; then
+    die "Suspicious Windows drive-relative path: ${input}. If this was a normal Windows path, quote the argument or use forward slashes, for example D:/path/file."
+  fi
+  input="${input//\\//}"
   printf '%s' "${input}"
 }
 
@@ -103,8 +107,14 @@ load_target() {
   TARGET_POLICY_LABEL="${TARGET_POLICY_LABEL:-}"
   TARGET_ACCESS_TOKEN="${TARGET_ACCESS_TOKEN:-}"
 
-  SSH_ARGS=(-p "${TARGET_PORT}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
-  SCP_ARGS=(-P "${TARGET_PORT}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new)
+  SSH_COMMON_OPTS=(
+    -o BatchMode=yes
+    -o StrictHostKeyChecking=accept-new
+    -o KexAlgorithms=^mlkem768x25519-sha256,sntrup761x25519-sha512,sntrup761x25519-sha512@openssh.com
+    -o WarnWeakCrypto=no
+  )
+  SSH_ARGS=(-p "${TARGET_PORT}" "${SSH_COMMON_OPTS[@]}")
+  SCP_ARGS=(-P "${TARGET_PORT}" "${SSH_COMMON_OPTS[@]}")
 
   if [[ -n "${TARGET_KEY:-}" ]]; then
     SSH_ARGS+=(-i "${TARGET_KEY}")

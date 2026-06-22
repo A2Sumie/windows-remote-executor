@@ -1,11 +1,9 @@
 # Codex Quick Start
 
-Read `AGENTS.md` first.
+Read `AGENTS.md` first. Use MCP tools for routine Windows work and `windows-remote-executor/bin/win-remote` for manual debugging, deployment, and compatibility.
 
-Use the C# native executor through the structured MCP server in `windows-remote-executor/mcp/win_remote_mcp.py` as the primary interface for routine Windows work from this repository.
-Use `windows-remote-executor/bin/win-remote` for manual debugging, deployment, and compatibility.
-
-This repository is the single source tree. In the parent workspace, legacy paths may be symlinks into this repository; do not recreate parallel copies. For remote executor deployment, tag and publish a GitHub release first, then deploy release assets.
+This repo is the source tree. Parent-workspace executor paths may be symlinks into it. For remote deployment, tag and publish a GitHub release, then deploy release assets.
+From the parent livestr workspace, use `git -C windows-remote-executor-public ...` so nested repos are not confused with the workspace root.
 
 ## First Commands
 
@@ -14,30 +12,28 @@ This repository is the single source tree. In the parent workspace, legacy paths
 ./windows-remote-executor/bin/win-remote run <target> whoami.exe
 ```
 
-## Rules
+## Route Rules
 
-- Prefer `run`, `capture`, `wsl`, `wsl-capture`, `wsl-py`, `wsl-py-capture`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, `exec`, and `update-tools`.
-- Do not hand-compose Windows command lines when the native/MCP path can carry structured argv or a staged script file.
-- If a workflow needs new coverage, add a native subcommand or MCP tool instead of adding another quoting convention.
-- For locked-down hosts, set `policy --command-mode argv-only`; then use `run`/`capture` with concrete native executables and explicit argv, or `exec` only for explicit script maintenance.
-- Use `run` for `dism.exe` and other Windows-native platform tools instead of wrapping them in PowerShell.
-- Use `wsl`, `wsl-capture`, or `wsl-sh` for Linux-side execution inside WSL.
-- Use `wsl-py` / `wsl-py-capture` or MCP `win_wsl_py*` for WSL Python venv/conda/model environments. Pass absolute Python paths and argv explicitly.
-- `wsl-sh` now stages scripts through file transfer and runs them from a Linux temp path, so `--file` and `--stdin` are safe for longer scripts.
-- Use `capture` when output may be UTF-16, locale-codepage, or binary-shaped and you need stable JSON plus raw bytes.
-- Use `win-remote exec --shell cmd` or the compatibility `win-remote cmd` wrapper for cmd-shaped scripts instead of raw SSH command strings.
-- Treat PowerShell as fallback only.
-- If PowerShell is required, it must go through `win-remote exec --file <script.ps1>` or `--stdin`, which uses the wrapper's staged exec bridge.
-- `run` and `capture` now reject raw `powershell.exe` / `pwsh` by default.
-- Do not send raw `powershell.exe`, `pwsh`, or hand-rolled `-EncodedCommand` over SSH.
-- If a result needs to be machine-readable, prefer `capture` for process output and `exec --stdin` plus JSON for Windows state.
-- Prefer `tasks` or MCP `win_tasks` for scheduled-task inspection instead of handwritten `Get-ScheduledTaskInfo` calls.
-- `update-tools` now publishes a versioned release and flips `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`, so it can succeed while older executor processes are still running.
-- For complex WSL setup, use `wsl-sh --file`, `wsl-sh --stdin`, or MCP `win_wsl_script` instead of `wsl.exe ... bash -lc ...`.
-- Keep WSL models, caches, venvs, and hot code on ext4 paths such as `/home/...`, and prefer absolute interpreter paths inside WSL.
-- Do not express WSL Python work as nested `bash -lc`, `python -c`, or activation strings when `wsl-py` can carry argv.
-- Keep hosts `private-only` unless the operator explicitly says otherwise.
-- Do not weaken token enforcement or `sshd` guardrails.
-- Do not commit real env files, tokens, host addresses, usernames, SSH keys, logs, or publish outputs.
-- Prefer the framework-dependent `.NET 8` build when the Windows host already has `.NET 8` runtime.
-- Release deployment rule: build and publish through GitHub Actions release assets; local builds are for development verification only.
+- MCP tools call the wrapper; prefer them for routine agent control.
+- `run`, `capture`, and `spawn` are native argv routes for concrete executables.
+- `capture` is the machine-readable process-output route.
+- `exec` and `exec-capture` stage PowerShell/cmd payloads through `exec-file-b64`; use `--file` or `--stdin` for script-shaped Windows maintenance.
+- The wrapper checks target native support before staged exec and staged file copy. Older targets that lack `exec-file-*` or `copy-file-b64` use a structured compatibility path with a stderr warning.
+- The wrapper rejects drive-relative Windows paths such as `D:folderfile.py`; quote backslash paths or use `D:/folder/file.py`.
+- The wrapper has a default guard for `powershell.exe` and `pwsh` through `run`, `capture`, and `spawn`; use `--allow-powershell` or another route when that is the lower-error choice.
+- On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
+- `argv-only` still allows staged `exec-file-b64` / `exec-file-capture-b64`; describe the route choice, not a blanket ban.
+- `wsl` and `wsl-capture` call `wsl.exe --exec`.
+- `wsl-sh` stages a script through Windows transfer, then bootstraps it into WSL `/tmp`.
+- `wsl-py` / `wsl-py-capture` carry explicit WSL Python interpreter, cwd, module/script, and args.
+- `wsl-resident` is for durable WSL services and readiness diagnostics.
+- Use `tasks` or MCP `win_tasks` for scheduled-task inspection.
+- Use `policy`, `guard`, and `repair` for access policy and `sshd` safety.
+- If a workflow needs new coverage, add a native subcommand or MCP tool before adding another quoting convention.
+
+## Boundaries
+
+- Keep targets `private-only` unless the operator changes that requirement.
+- Keep token enforcement, `access-policy.json`, and `sshd` guardrails.
+- Keep WSL models, caches, venvs, and hot code on ext4 paths such as `/home/...`, not `/mnt/*`.
+- Prefer framework-dependent `.NET 8` builds when the host already has `.NET 8`; use self-contained publish only when needed.

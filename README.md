@@ -7,7 +7,7 @@ Windows Remote Executor is a two-part toolkit for operating Windows hosts from m
 
 In the parent `livestr` workspace, the legacy top-level paths may be symlinks into this repository. Keep this as the single source tree; do not maintain a second copy.
 
-The design goal is simple: keep SSH as the transport, keep PowerShell as a reluctant fallback, and prefer a dropped native executable plus file transfer over brittle inline script transport. That reduces local quoting failures, keeps the control plane easier to reason about, and narrows the amount of PowerShell/AMSI-shaped surface used during normal automation.
+The design goal is simple: keep SSH as the transport and choose routes that minimize quoting, encoding, path, and command-length failures. In normal automation that means a dropped native executable, structured argv, capture output, staged scripts, and file transfer; when another route is lower-risk, use it explicitly and verify the result.
 
 For agentic clients, the preferred control plane is now the structured MCP server in `windows-remote-executor/MCP.md`, not ad hoc shell command generation.
 
@@ -55,7 +55,6 @@ Remote executor deployments should use GitHub release assets. Local publish outp
 This repository also ships agent-facing entrypoints that are meant to be discovered directly by tooling:
 
 - `AGENTS.md` for repository-local agent guidance
-- `CLAUDE.md` for Claude Code style entrypoint discovery
 - `CODEX.md` for Codex style entrypoint discovery
 - `templates/AGENT_INSTRUCTIONS_TEMPLATE.md` for copy-paste system-prompt or task-brief usage
 

@@ -1,108 +1,84 @@
 # Agent Guide
 
-If you are an agentic tool operating from this repository, use this file as the default operating brief.
+Use this repository to operate Windows hosts from macOS or Linux through structured executor routes.
 
-## Goal
+## Source Of Truth
 
-Use this repository to operate a Windows host from macOS or Linux through the provided executor.
-
-- Primary control plane: C# native executor through `windows-remote-executor/mcp/win_remote_mcp.py`
-- Local wrapper: `windows-remote-executor/bin/win-remote`
-- Structured MCP server: `windows-remote-executor/mcp/win_remote_mcp.py`
-- Windows native executor: `windows-remote-executor-native`
-- Default stance: SSH on a private address, access policy enabled, PowerShell minimized
-- Stability boundary: do not hand-compose Windows command lines when structured argv or the staged exec bridge can express the operation.
-- Source boundary: this repository is the single source tree. In the parent workspace, `windows-remote-executor/` and `windows-remote-executor-native/` may be symlinks into this repo; do not recreate parallel source copies.
-- Deployment boundary: remote executor deployments must come from GitHub release assets after a tag/release, not from an ad hoc local build, unless the task is explicitly a local development smoke test.
+- Wrapper: `windows-remote-executor/bin/win-remote`
+- MCP server: `windows-remote-executor/mcp/win_remote_mcp.py`
+- Native executor: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
+- Parent-workspace `windows-remote-executor/` and `windows-remote-executor-native/` paths may be symlinks into this repo. Keep this repo as the source tree.
+- From the parent livestr workspace, run Git commands with `git -C windows-remote-executor-public ...` or an explicit owning repo path.
+- Deploy executor updates from GitHub release assets after a tag/release. Local publish output is for development smoke tests.
 
 ## First Steps
 
 1. Read `windows-remote-executor/README.md`.
 2. Locate the real target env file outside git-tracked defaults.
 3. Start with `./windows-remote-executor/bin/win-remote probe <target>`.
-4. For routine agent use, use the MCP server over shell-authored command strings.
-5. If the task touches host exposure or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
-6. Only then perform file transfer, process execution, deploys, or tool updates.
+4. For routine agent use, prefer MCP tools over shell-authored command strings.
+5. If the task touches exposure, policy, or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
 
-## Command Choice
+## Route Choice
 
-- Use `win-remote run` for native executables such as `whoami.exe`, `cmdkey.exe`, `tasklist.exe`, `dotnet`, `git`, and app binaries.
-- Use `win-remote run` for Windows-native platform tools such as `dism.exe`, `shutdown.exe`, `curl.exe`, and `reg.exe`.
-- Use `win-remote wsl`, `win-remote wsl-capture`, `win-remote wsl-sh`, `win-remote wsl-resident`, or MCP `win_wsl*` for Linux-side work inside WSL.
-- Use `win-remote wsl-py`, `win-remote wsl-py-capture`, or MCP `win_wsl_py*` for Python work inside WSL venv/conda/model environments. Pass the Python executable, module/script, cwd, and args explicitly; do not encode Python calls through nested shell strings.
-- `win-remote wsl-sh` now stages local scripts through file transfer and executes them from WSL ext4 temp space, so it avoids Windows command-line length failures.
-- Use `--heartbeat-seconds` on long quiet foreground WSL commands before adding fake progress lines to the app itself.
-- Use `wsl-resident` when the goal is a durable WSL service and you want executor-side PID or port verification plus log diagnostics.
-- Use `win-remote capture` when output encoding is unknown, localized, UTF-16-shaped, or byte-sensitive and you need stable JSON plus raw base64 bytes.
-- Use `win-remote py` for Python scripts on the Windows host.
-- Use `win-remote put` and `win-remote get` for file transfer.
-- Use `win-remote deploy` for application staged directory updates.
-- Use `win-remote update-tools --native-zip <release-asset.zip>` when updating the remote executor itself. Publish the GitHub release first, download the release artifact, then deploy that artifact.
-- If existing tools cannot represent a workflow, add a C# native subcommand or MCP tool before inventing another shell quoting convention.
-- Use `win-remote policy` to install or rotate `access-policy.json`.
-- Use `win-remote policy --command-mode argv-only` when the host must reject legacy inline PowerShell, Python helper, WSL launcher routes, and shell/interpreter executables under `run`/`capture`.
-- Use `win-remote guard` to validate that `sshd` is still bound safely.
-- Use `win-remote repair` when `sshd` validation fails, the service will not stay up, or you need to force the managed config back into place.
-- Use `win-remote tasks` or MCP `win_tasks` when you need scheduled-task state; do not hand-author `Get-ScheduledTaskInfo -TaskName ...` for names with spaces.
-- Use `win-remote exec --file <script.ps1>` or `--stdin` when PowerShell/cmd script control is specifically required; it stages the payload file before native execution.
-- Use `win-remote exec --shell cmd` or the compatibility `win-remote cmd` wrapper for cmd-shaped scripts instead of raw SSH command strings.
-- Do not send raw PowerShell command lines over SSH. If PowerShell must run, it must go through the wrapper's staged exec bridge.
-- `win-remote run` and `win-remote capture` now block raw `powershell.exe` / `pwsh` by default.
-- Silent admin commands such as `put`, `get`, and no-post `deploy` now return `OK` on success so clients do not treat silence as uncertainty.
-- `win-remote update-tools` now stages versioned releases under `C:\CodexRemote\tools\releases\...` and flips the stable launcher `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`.
+- MCP tools call the wrapper; use them for routine agent work: `win_probe`, `win_run`, `win_capture`, `win_wsl*`, `win_exec*`, `win_tasks`, `win_put`, `win_get`, `win_guard`, and `win_repair`.
+- `run`, `capture`, and `spawn` are native argv routes. Use them for concrete Windows executables such as `whoami.exe`, `tasklist.exe`, `reg.exe`, `curl.exe`, `dism.exe`, `dotnet`, `git`, and app binaries.
+- `capture` returns structured output and raw bytes; use it when process output may be localized, UTF-16, codepage-shaped, or byte-sensitive.
+- `exec` and `exec-capture` stage PowerShell or cmd payloads through the native `exec-file-b64` bridge. Use `--file` or `--stdin` for Windows state or maintenance scripts.
+- `exec --shell cmd` and compatibility `cmd` are for cmd-shaped scripts.
+- The wrapper checks target native help before using staged exec and staged file copy. If an older target lacks `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64`, it runs the same staged file through structured `run-b64` or `capture-b64` and prints a compatibility warning on stderr.
+- If an older target lacks `spawn-b64`, the wrapper fails before launch with an update/fallback instruction instead of surfacing native `Unknown command`.
+- `py` is for Python scripts on the Windows host.
+- `wsl` and `wsl-capture` call `wsl.exe --exec <program> <args>`.
+- `wsl-py` and `wsl-py-capture` run WSL Python through explicit interpreter, cwd, module/script, and args.
+- `wsl-sh` and `wsl-sh-capture` upload a script to the Windows stage, translate the path into WSL, and bootstrap it into `/tmp/windows-remote-executor-*.sh` before execution.
+- `wsl-resident` stages a WSL script and returns readiness diagnostics for durable services.
+- `put`, `get`, and `deploy` move files. Silent successful admin routes return `OK`.
+- `policy`, `guard`, and `repair` manage access policy and `sshd` safety.
+- `tasks` or MCP `win_tasks` inspect scheduled tasks.
+- `update-tools --native-zip <release-asset.zip>` deploys a release asset and flips `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`.
 
-## PowerShell Rule
+## Route And Policy Boundary
 
-Treat raw PowerShell command lines as disallowed.
+- Prefer the route with the lowest expected error rate for the concrete task. In normal agent work, that is MCP, structured argv, staged payload files, `capture`, or staged `exec`.
+- The wrapper has a default guard for `powershell.exe` and `pwsh` through `run`, `capture`, and `spawn`; `--allow-powershell` and `WIN_REMOTE_ALLOW_RAW_POWERSHELL=1` are explicit escape hatches when that route is lower-risk.
+- On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
+- `argv-only` still allows staged `exec-file-b64` and `exec-file-capture-b64`. Use that bridge when script-shaped maintenance is the lower-error route under this policy.
+- Record the actual route choice and verification evidence instead of reducing the policy to a blanket PowerShell claim.
+- If existing routes cannot represent a workflow without fragile quoting, add a native subcommand or MCP tool before adding another quoting convention.
+- Use forward slashes for Windows paths, for example `D:/StreamServ/auto_stream.py`, or quote backslash paths. The wrapper rejects drive-relative shapes such as `D:StreamServauto_stream.py` because they usually mean the local shell stripped backslashes.
 
-- Prefer `win-remote exec --file script.ps1`.
-- If generating PowerShell dynamically, prefer `--stdin`.
-- Do not use inline PowerShell as a normal control path.
-- Never bypass the wrapper and send raw `powershell.exe ...`, `pwsh ...`, or hand-rolled `-EncodedCommand`.
-- Do not tunnel raw PowerShell through `win-remote run` or `win-remote capture` unless you intentionally pass the legacy override.
-- On `argv-only` hosts, keep shell-shaped work on the staged `exec` bridge and do not use `py`, `wsl*`, or shell/interpreter executables through `run`/`capture`; the native executor should reject those routes.
-- If the goal is machine-readable Windows state, prefer `exec --stdin` plus `ConvertTo-Json -Compress`.
-- If the goal is WSL or Linux setup, prefer `win-remote wsl-sh --file`, `--stdin`, `win-remote wsl-resident`, or MCP `win_wsl_script` / `win_wsl_resident` instead of hand-writing `wsl.exe ... bash -lc ...` or `/mnt/c/...` paths.
-- If the goal is WSL Python execution, prefer `wsl-py` / `wsl-py-capture` with absolute Python executables such as `/home/.../.venv/bin/python`.
+## WSL Boundary
+
+- Use `wsl`/`wsl-capture` for direct Linux argv.
+- Use `wsl-sh --file` or `--stdin` for longer Linux shell scripts.
+- Use `wsl-resident` when the goal is a long-lived WSL service; treat launch success as provisional until delayed listener, health, process, log, or GPU proof passes.
+- Keep long-lived models, caches, venvs, and hot code on WSL ext4 paths such as `/home/...`, not `/mnt/*`.
+- Use absolute WSL paths for brittle interpreters and GPU tools, for example `/home/.../.venv/bin/python` and `/usr/lib/wsl/lib/nvidia-smi`.
 - Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
-- Keep long-lived models, caches, and active code on WSL ext4 such as `/home/...`, not on `/mnt/*`.
-- When a WSL workload depends on a specific interpreter or GPU tool, prefer absolute paths such as `/home/.../.venv/bin/python` and `/usr/lib/wsl/lib/nvidia-smi`.
 
-## Encoding Rule
+## Encoding And Parsing
 
-- Assume localized Windows CLI output may be UTF-16 or codepage-shaped and unsuitable for parsing over SSH.
-- Treat `win-remote run` as a human-oriented, best-effort text path.
-- Use `win-remote capture` when you need exact bytes, detected encoding labels, or stable machine parsing of stdout/stderr.
-- Prefer `wsl-capture` over PTY scraping for machine decisions from Linux-side commands.
-- Do not make automation decisions from mojibake text returned by `wsl.exe`, `dism.exe`, `systeminfo.exe`, or any localized CLI unless you captured bytes or emitted JSON on the Windows side.
-- Prefer JSON from Windows-local PowerShell when the result is state, and prefer `capture` when the result is process output.
+- Treat localized Windows CLI text as human-oriented unless captured bytes or JSON prove otherwise.
+- Prefer `capture` for process output decisions.
+- Prefer `exec --stdin` plus `ConvertTo-Json -Compress` for Windows state decisions.
+- Prefer `wsl-capture` over PTY scraping for machine decisions from Linux commands.
 
-## Security Rule
+## Security
 
-- Assume the target should remain `private-only` unless the operator explicitly says otherwise.
-- Do not weaken or delete `access-policy.json`.
-- Do not remove `sshd` guard tasks.
-- Do not allow wildcard listeners such as `0.0.0.0` or `::`.
-- If a token is required, let `win-remote` forward it from the target env file.
+- Keep targets `private-only` unless the operator explicitly changes that requirement.
+- Keep `access-policy.json`, token enforcement, and `sshd` guard tasks in place.
 
-## Verification Rule
+## Verification
 
-After making changes, verify with at least:
+Use the checks that match the change:
 
 1. `win-remote probe <target>`
-2. one `win-remote run <target> ...` smoke test
+2. one native argv smoke test such as `win-remote run <target> whoami.exe`
 3. `win-remote guard <target>` if networking or policy changed
-4. one PowerShell path through `exec --file` or `exec --stdin` only if your change touched PowerShell behavior
-5. `scripts/verify-remote-cases.sh <target>` before release deployment when the target is available
-
-## Git Rule
-
-- Do not commit real `targets/*.env` files other than `example.env`.
-- Do not commit real access tokens, hostnames, Tailscale IPs, usernames, SSH public keys, logs, or publish output.
-- Do not commit parent-workspace symlink replacements as copied source trees.
-- Prefer framework-dependent `.NET 8` publish when the Windows host already has `.NET 8` runtime installed.
-- Use self-contained publish only when the host cannot satisfy the runtime requirement.
-- For releases, push a version tag and let GitHub Actions build the assets. Deploy those release assets to remote hosts.
+4. one `exec --file` or `exec --stdin` path if staged Windows script behavior changed
+5. one `wsl-capture`, `wsl-sh-capture`, or `wsl-resident` proof if WSL behavior changed
+6. `scripts/verify-remote-cases.sh <target>` before release deployment when the target is available
 
 ## Minimal Workflow
 
@@ -111,11 +87,10 @@ After making changes, verify with at least:
 ./windows-remote-executor/bin/win-remote run <target> whoami.exe
 ./windows-remote-executor/bin/win-remote put <target> ./local.file C:/CodexRemote/inbox/local.file
 ./windows-remote-executor/bin/win-remote deploy <target> ./dist C:/CodexRemote/apps/myapp
-./windows-remote-executor/bin/win-remote update-tools <target>
+./windows-remote-executor/bin/win-remote update-tools --native-zip <release-asset.zip>
 ```
 
 ## More Templates
 
 - Copy-paste prompt template: `templates/AGENT_INSTRUCTIONS_TEMPLATE.md`
-- Claude-oriented entrypoint: `CLAUDE.md`
 - Codex-oriented entrypoint: `CODEX.md`

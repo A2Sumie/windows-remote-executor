@@ -227,6 +227,8 @@ When `access-policy.json` contains an access token hash, native commands such as
 ## Notes
 
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
+- A drive-relative path such as `D:StreamServauto_stream.py` is rejected locally because it usually means the caller forgot to quote `D:\StreamServ\auto_stream.py` and the local shell stripped backslashes.
+- `exec`, `exec-capture`, `cmd`, `tasks`, and staged `put/get` copy paths check whether the target native executor advertises the needed native command. Older targets that lack `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64` use a structured compatibility path and print a stderr warning; update the target release before depending on newer native-only routes such as `spawn-b64`.
 - For new automation, prefer adding a native subcommand or MCP tool over adding another shell quoting convention. The goal is to make spaces, quotes, non-ASCII text, and long scripts boring.
 - `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
@@ -243,8 +245,8 @@ When `access-policy.json` contains an access token hash, native commands such as
 - Prefer `capture` or `wsl-capture` when stdout/stderr may be UTF-16, locale-codepage, binary-adjacent, or otherwise too brittle for plain PTY parsing.
 - Prefer `spawn` for Windows-side resident/background processes. It sends every argument as UTF-8 base64 to native `spawn-b64`; the native side stages a one-shot scheduled task and then calls `CreateProcessW` from that detached context, with stdout/stderr file handles opened by the bridge. The caller should treat the returned JSON as a launch receipt; `ProcessId` can be `0` when Task Scheduler is used as the launcher.
 - On `X570`, prefer direct native executables through `run` for argv-shaped work. For shell-shaped work, use staged `exec --shell powershell` or `exec --shell cmd`; `win-remote cmd` is a compatibility wrapper over the same staged cmd bridge.
-- Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed, the native executor must be present.
-- Treat raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport as unsupported. `run` and `capture` now block raw PowerShell by default; use `win-remote exec --file` or `--stdin` so the wrapper owns staging and native execution.
+- Legacy direct-over-SSH PowerShell fallback was removed. If PowerShell is needed through the normal wrapper path, the native executor must be present.
+- `run`, `capture`, and `spawn` have a default guard for raw `powershell.exe` / `pwsh`; `--allow-powershell` and `WIN_REMOTE_ALLOW_RAW_POWERSHELL=1` are explicit escape hatches. Prefer staged `exec --file` or `--stdin` when it reduces quoting and encoding risk.
 - Silent admin commands such as `put`, `get`, `deploy` without `--post`, `update-tools` without `--install-guard`, and `policy --no-run-guard` now print `OK` on success so agent clients do not misread silence as uncertainty.
 - `find` still relies on an externally staged `es.exe`.
 - The PowerShell route is now `local script/file/stdin -> scp staging -> WindowsRemoteExecutor.Native.exe exec-file-b64 -> PowerShell -EncodedCommand`, so the SSH command line carries only a short staged path.

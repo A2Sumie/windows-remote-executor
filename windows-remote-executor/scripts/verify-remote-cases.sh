@@ -125,6 +125,14 @@ if not isinstance(payload, dict) or not payload:
     raise SystemExit("probe did not return a JSON object")
 PY
 
+status_line "drive-relative Windows path is rejected locally"
+PATH_GUARD_LOG="${TMP_DIR}/path-guard.log"
+if "${WIN_REMOTE}" get "${TARGET}" D:CodexRemoteinboxbad.txt "${TMP_DIR}/bad.txt" >"${PATH_GUARD_LOG}" 2>&1; then
+  printf 'error: drive-relative remote path unexpectedly succeeded\n' >&2
+  exit 1
+fi
+grep -q 'Suspicious Windows drive-relative path' "${PATH_GUARD_LOG}"
+
 if [[ ${ARGV_ONLY} -eq 0 ]]; then
   status_line "capture large stdout/stderr without pipe deadlock"
   LARGE_JSON="${TMP_DIR}/large.json"
@@ -138,6 +146,12 @@ if [[ ${ARGV_ONLY} -eq 0 ]]; then
   "${WIN_REMOTE}" capture "${TARGET}" --out "${STDIN_JSON}" py.exe -3 -c 'import sys; print("stdin-len=%d" % len(sys.stdin.read()))' >/dev/null
   assert_json_eq "${STDIN_JSON}" "exitCode" "0"
   assert_json_contains "${STDIN_JSON}" "stdoutText" "stdin-len=0"
+
+  status_line "capture --cmd compatibility route"
+  CMD_JSON="${TMP_DIR}/cmd-capture.json"
+  "${WIN_REMOTE}" capture "${TARGET}" --out "${CMD_JSON}" --cmd 'echo capture-cmd-ok' >/dev/null
+  assert_json_eq "${CMD_JSON}" "exitCode" "0"
+  assert_json_contains "${CMD_JSON}" "stdoutText" "capture-cmd-ok"
 else
   status_line "argv-only allows ordinary native argv capture"
   WHOAMI_JSON="${TMP_DIR}/whoami.json"
@@ -167,6 +181,17 @@ fi
 Write-Output 'structured-exec-ok'
 EOF
 grep -q 'structured-exec-ok' "${EXEC_LOG}"
+
+if [[ ${ARGV_ONLY} -eq 0 ]]; then
+  status_line "structured exec fallback for older native executor"
+  EXEC_FALLBACK_LOG="${TMP_DIR}/exec-fallback.log"
+  EXEC_FALLBACK_ERR="${TMP_DIR}/exec-fallback.err"
+  WIN_REMOTE_FORCE_EXEC_FALLBACK=1 "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_FALLBACK_LOG}" 2>"${EXEC_FALLBACK_ERR}" <<'EOF'
+Write-Output 'structured-exec-fallback-ok'
+EOF
+  grep -q 'structured-exec-fallback-ok' "${EXEC_FALLBACK_LOG}"
+  grep -q 'using run-b64 to run the staged powershell payload' "${EXEC_FALLBACK_ERR}"
+fi
 
 status_line "put/get remote path and filename containing spaces"
 LOCAL_PAYLOAD="${TMP_DIR}/payload with spaces.txt"
