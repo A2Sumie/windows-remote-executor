@@ -16,7 +16,7 @@ from typing import Any
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.1.15"
+SERVER_VERSION = "0.1.16"
 PROTOCOL_VERSION = "2025-03-26"
 WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
 

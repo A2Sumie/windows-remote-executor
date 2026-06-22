@@ -3308,14 +3308,8 @@ cmd_update_tools() {
   release_dir_cmd="$(remote_cmd_path "${release_dir}")"
   local stage_dir_cmd
   stage_dir_cmd="$(remote_cmd_path "${stage_dir}")"
-  local stage_payload_dir_cmd
-  stage_payload_dir_cmd="$(remote_cmd_path "${stage_payload_dir}")"
-  local stage_policy_path_cmd
-  stage_policy_path_cmd="$(remote_cmd_path "${stage_policy_path}")"
   local stage_es_path_cmd
   stage_es_path_cmd="$(remote_cmd_path "${stage_es_path}")"
-  local stage_launcher_path_cmd
-  stage_launcher_path_cmd="$(remote_cmd_path "${stage_launcher_path}")"
   local policy_path_cmd
   policy_path_cmd="$(remote_cmd_path "${TARGET_POLICY_PATH}")"
   local es_path_cmd
@@ -3336,20 +3330,27 @@ cmd_update_tools() {
   for local_path in "${local_files[@]}"; do
     local base_name
     base_name="$(basename "${local_path}")"
-    ssh_exec_cmd "copy /y \"${stage_payload_dir_cmd}\\${base_name}\" \"${release_dir_cmd}\\${base_name}\" >nul"
+    copy_remote_file_bridge "${stage_payload_dir}/${base_name}" "${release_dir}/${base_name}" >/dev/null
   done
 
+  ssh_exec_cmd "if not exist \"${release_dir_cmd}\\WindowsRemoteExecutor.Native.exe\" (echo error: staged native exe was not copied to release directory. 1>&2 & exit /b 66)"
+
   if [[ -n "${policy_file}" ]]; then
-    ssh_exec_cmd "(if exist \"${policy_path_cmd}\" copy /y \"${policy_path_cmd}\" \"${policy_path_cmd}.bak-${stamp}\" >nul) && copy /y \"${stage_policy_path_cmd}\" \"${policy_path_cmd}\" >nul && copy /y \"${stage_policy_path_cmd}\" \"${release_dir_cmd}\\access-policy.json\" >nul"
+    ssh_exec_cmd "if exist \"${policy_path_cmd}\" copy /y \"${policy_path_cmd}\" \"${policy_path_cmd}.bak-${stamp}\" >nul"
+    copy_remote_file_bridge "${stage_policy_path}" "${TARGET_POLICY_PATH}" >/dev/null
+    copy_remote_file_bridge "${stage_policy_path}" "${release_dir}/access-policy.json" >/dev/null
   else
-    ssh_exec_cmd "if exist \"${policy_path_cmd}\" copy /y \"${policy_path_cmd}\" \"${release_dir_cmd}\\access-policy.json\" >nul"
+    if ssh_exec_cmd "if exist \"${policy_path_cmd}\" exit /b 0 else exit /b 1" >/dev/null 2>&1; then
+      copy_remote_file_bridge "${TARGET_POLICY_PATH}" "${release_dir}/access-policy.json" >/dev/null
+    fi
   fi
 
   if [[ -n "${es_exe}" ]]; then
     ssh_exec_cmd "(if exist \"${es_path_cmd}\" copy /y \"${es_path_cmd}\" \"${es_path_cmd}.bak-${stamp}\" >nul) && copy /y \"${stage_es_path_cmd}\" \"${es_path_cmd}\" >nul"
   fi
 
-  ssh_exec_cmd "(if exist \"${launcher_path_cmd}\" copy /y \"${launcher_path_cmd}\" \"${launcher_path_cmd}.bak-${stamp}\" >nul) && copy /y \"${stage_launcher_path_cmd}\" \"${launcher_path_cmd}\" >nul"
+  ssh_exec_cmd "if exist \"${launcher_path_cmd}\" copy /y \"${launcher_path_cmd}\" \"${launcher_path_cmd}.bak-${stamp}\" >nul"
+  copy_remote_file_bridge "${stage_launcher_path}" "${TARGET_NATIVE_LAUNCHER}" >/dev/null
   ssh_exec_cmd ">\"${current_release_file_cmd}\" echo ${release_dir_cmd}"
 
   local task_update_ps
