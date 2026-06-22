@@ -348,6 +348,31 @@ build_native_invoke_code() {
   printf 'if exist "%s" (%s) else (exit /b 127)' "${remote_path_cmd}" "${body}"
 }
 
+remote_current_release_dir_best_effort() {
+  local current_release_file_cmd
+  current_release_file_cmd="$(remote_cmd_path "${TARGET_NATIVE_CURRENT_FILE}")"
+
+  local output
+  if ! output="$(ssh_exec_cmd "if exist \"${current_release_file_cmd}\" type \"${current_release_file_cmd}\"" 2>/dev/null)"; then
+    return 1
+  fi
+
+  local first_line
+  first_line="$(printf '%s\n' "${output}" | tr -d '\r' | awk 'NF { print; exit }')"
+  [[ -n "${first_line}" ]] || return 1
+
+  normalize_remote_path "${first_line}"
+}
+
+remote_file_exists_best_effort() {
+  local remote_path
+  remote_path="$(normalize_remote_path "$1")"
+  local remote_path_cmd
+  remote_path_cmd="$(remote_cmd_path "${remote_path}")"
+
+  ssh_exec_cmd "if exist \"${remote_path_cmd}\" (exit /b 0) else (exit /b 1)" >/dev/null 2>&1
+}
+
 json_array_from_values() {
   local rendered="["
   local first=1
@@ -857,8 +882,27 @@ ssh_exec_native_tokens() {
   local launcher_path="${TARGET_NATIVE_LAUNCHER}"
   local fallback_path="${TARGET_NATIVE_EXE}"
   local code=""
+  local current_release_dir=""
+  local selected_native_path=""
 
-  if [[ "${launcher_path}" == "${fallback_path}" ]]; then
+  if [[ -n "${TARGET_NATIVE_CURRENT_FILE:-}" ]]; then
+    current_release_dir="$(remote_current_release_dir_best_effort || true)"
+  fi
+
+  if [[ -n "${current_release_dir}" ]]; then
+    local current_native_path="${current_release_dir}/WindowsRemoteExecutor.Native.exe"
+    if remote_file_exists_best_effort "${current_native_path}"; then
+      selected_native_path="${current_native_path}"
+    fi
+  fi
+
+  if [[ -z "${selected_native_path}" ]] && remote_file_exists_best_effort "${fallback_path}"; then
+    selected_native_path="${fallback_path}"
+  fi
+
+  if [[ -n "${selected_native_path}" ]]; then
+    code="$(build_native_invoke_body "${selected_native_path}" "${native_tokens[@]}")"
+  elif [[ "${launcher_path}" == "${fallback_path}" ]]; then
     code="$(build_native_invoke_code "${fallback_path}" "${native_tokens[@]}")"
   else
     local launcher_body
