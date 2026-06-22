@@ -738,11 +738,29 @@ invoke_exec_file_bridge() {
 
   local run_status=0
   if [[ ${native_bridge_supported} -eq 1 ]]; then
-    if ssh_exec_native_tokens "${native_tokens[@]}"; then
+    local native_output_dir
+    native_output_dir="$(mktemp -d)"
+    local native_stdout="${native_output_dir}/stdout"
+    local native_stderr="${native_output_dir}/stderr"
+    if ssh_exec_native_tokens "${native_tokens[@]}" >"${native_stdout}" 2>"${native_stderr}"; then
+      cat "${native_stdout}"
+      cat "${native_stderr}" >&2
       run_status=0
     else
-      run_status=$?
+      local native_status=$?
+      if grep -F -- "Unknown command: ${native_command}" "${native_stderr}" >/dev/null; then
+        if invoke_exec_file_compat_bridge "${mode}" "${kind}" "${cwd}" "${remote_stage_path}" "${native_command}" "rejected"; then
+          run_status=0
+        else
+          run_status=$?
+        fi
+      else
+        run_status=${native_status}
+        cat "${native_stdout}"
+        cat "${native_stderr}" >&2
+      fi
     fi
+    rm -rf "${native_output_dir}"
   else
     if invoke_exec_file_compat_bridge "${mode}" "${kind}" "${cwd}" "${remote_stage_path}" "${native_command}"; then
       run_status=0
@@ -761,13 +779,14 @@ invoke_exec_file_compat_bridge() {
   local cwd="$3"
   local remote_stage_path="$4"
   local missing_native_command="$5"
+  local support_message="${6:-does not advertise}"
 
   local native_route="run-b64"
   if [[ "${mode}" == "capture" ]]; then
     native_route="capture-b64"
   fi
 
-  warn_compat_route "remote native does not advertise ${missing_native_command}; using ${native_route} to run the staged ${kind} payload. Update the target executor when convenient."
+  warn_compat_route "remote native ${support_message} ${missing_native_command}; using ${native_route} to run the staged ${kind} payload. Update the target executor when convenient."
 
   local -a native_tokens=("${native_route}")
   case "${kind}" in
