@@ -25,9 +25,12 @@ jobs:
         run: |
           set -euo pipefail
           bash -n windows-remote-executor/bin/win-remote
+          bash -n windows-remote-executor/bin/win-remote-legacy
           bash -n windows-remote-executor/lib/common.sh
           bash -n windows-remote-executor/scripts/verify-remote-cases.sh
+          python3 -m py_compile windows-remote-executor/lib/win_remote_cli.py
           python3 -m py_compile windows-remote-executor/mcp/win_remote_mcp.py
+          python3 -m unittest windows-remote-executor/tests/test_win_remote_cli.py
           dotnet build windows-remote-executor-native/src/WindowsRemoteExecutor.Native/WindowsRemoteExecutor.Native.csproj \
             -c Release \
             -r win-x64 \

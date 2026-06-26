@@ -129,6 +129,7 @@ internal static class ExecutorAccessControl
         return command switch
         {
             "probe" => true,
+            "invoke-b64" => true,
             "run-b64" => true,
             "capture-b64" => true,
             "spawn-b64" => true,

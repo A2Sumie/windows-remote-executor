@@ -25,15 +25,21 @@ internal static class Program
                 return 0;
             }
 
-            if (!OperatingSystem.IsWindows())
-            {
-                Console.Error.WriteLine("This executable only runs on Windows.");
-                return 1;
-            }
-
             var command = args[0].Trim().ToLowerInvariant();
             var securityContext = ExecutorAccessControl.Extract(args.Skip(1).ToArray());
             var commandArgs = securityContext.RemainingArgs;
+
+            if (command == "selftest")
+            {
+                Console.WriteLine(InvokeRequestDispatcher.BuildSelfTestJson());
+                return 0;
+            }
+
+            if (!OperatingSystem.IsWindows())
+            {
+                Console.Error.WriteLine("This executable only runs on Windows. Use selftest for cross-platform envelope validation.");
+                return 1;
+            }
 
             switch (command)
             {
@@ -55,6 +61,10 @@ internal static class Program
                     var probe = ProbeCollector.Collect();
                     Console.WriteLine(JsonSerializer.Serialize(probe, JsonOptions));
                     return 0;
+
+                case "invoke-b64":
+                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
+                    return await InvokeRequestDispatcher.RunAsync(commandArgs, securityContext.AccessToken);
 
                 case "run-b64":
                     ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
@@ -157,6 +167,8 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe guard-sshd [options]
               WindowsRemoteExecutor.Native.exe repair-sshd [options]
               WindowsRemoteExecutor.Native.exe probe
+              WindowsRemoteExecutor.Native.exe selftest
+              WindowsRemoteExecutor.Native.exe invoke-b64 <base64url-json-envelope>
               WindowsRemoteExecutor.Native.exe run-b64 [options]
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
               WindowsRemoteExecutor.Native.exe spawn-b64 [options]
@@ -291,6 +303,11 @@ internal static class Program
 
             security option:
               --access-token <base64-utf8-token>
+
+            invoke-b64 envelope:
+              A base64url UTF-8 JSON object with an action such as process.run,
+              process.capture, script.run, script.capture, wsl.run, wsl.capture,
+              wsl.script, wsl.resident, file.copy, guard.run, or repair.run.
             """);
     }
 }

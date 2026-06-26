@@ -9,7 +9,7 @@ Use this repository to operate Windows hosts from macOS or Linux through structu
 - Native executor: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
 - Parent-workspace `windows-remote-executor/` and `windows-remote-executor-native/` paths may be symlinks into this repo. Keep this repo as the source tree.
 - From the parent livestr workspace, run Git commands with `git -C windows-remote-executor-public ...` or an explicit owning repo path.
-- Deploy executor updates from GitHub release assets after a tag/release. Local publish output is for development smoke tests.
+- Deploy executor updates only from GitHub release assets after a tag/release. Local publish output is for build verification, not production deployment.
 
 ## First Steps
 
@@ -26,7 +26,8 @@ Use this repository to operate Windows hosts from macOS or Linux through structu
 - `capture` returns structured output and raw bytes; use it when process output may be localized, UTF-16, codepage-shaped, or byte-sensitive.
 - `exec` and `exec-capture` stage PowerShell or cmd payloads through the native `exec-file-b64` bridge. Use `--file` or `--stdin` for Windows state or maintenance scripts.
 - `exec --shell cmd` and compatibility `cmd` are for cmd-shaped scripts.
-- The wrapper checks target native help before using staged exec and staged file copy. If an older target lacks `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64`, it runs the same staged file through structured `run-b64` or `capture-b64` and prints a compatibility warning on stderr.
+- The wrapper is a Python shim around a v2 `invoke-b64` JSON envelope. If an older target lacks `invoke-b64`, it falls back to `win-remote-legacy` so existing hosts keep working until they are updated from a release asset.
+- The legacy wrapper checks target native help before using staged exec and staged file copy. If an older target lacks `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64`, it runs the same staged file through structured `run-b64` or `capture-b64` and prints a compatibility warning on stderr.
 - If an older target lacks `spawn-b64`, the wrapper fails before launch with an update/fallback instruction instead of surfacing native `Unknown command`.
 - `py` is for Python scripts on the Windows host.
 - `wsl` and `wsl-capture` call `wsl.exe --exec <program> <args>`.
@@ -45,7 +46,7 @@ Use this repository to operate Windows hosts from macOS or Linux through structu
 - On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
 - `argv-only` still allows staged `exec-file-b64` and `exec-file-capture-b64`. Use that bridge when script-shaped maintenance is the lower-error route under this policy.
 - Record the actual route choice and verification evidence instead of reducing the policy to a blanket PowerShell claim.
-- If existing routes cannot represent a workflow without fragile quoting, add a native subcommand or MCP tool before adding another quoting convention.
+- If existing routes cannot represent a workflow without fragile quoting, add an `invoke-b64` action plus MCP/tool support before adding another quoting convention.
 - Use forward slashes for Windows paths, for example `D:/StreamServ/auto_stream.py`, or quote backslash paths. The wrapper rejects drive-relative shapes such as `D:StreamServauto_stream.py` because they usually mean the local shell stripped backslashes.
 
 ## WSL Boundary
@@ -78,7 +79,7 @@ Use the checks that match the change:
 3. `win-remote guard <target>` if networking or policy changed
 4. one `exec --file` or `exec --stdin` path if staged Windows script behavior changed
 5. one `wsl-capture`, `wsl-sh-capture`, or `wsl-resident` proof if WSL behavior changed
-6. `scripts/verify-remote-cases.sh <target>` before release deployment when the target is available
+6. Python CLI tests and native build/selftest before release deployment; `scripts/verify-remote-cases.sh <target>` when the target is available
 
 ## Minimal Workflow
 

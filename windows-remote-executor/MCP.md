@@ -23,7 +23,7 @@ That means the model calls a tool like `win_run` instead of generating:
 ./windows-remote-executor/bin/win-remote run X570 ...
 ```
 
-This removes day-to-day quoting drift from the model layer. The C# native executor owns process launch and structured argv handling; MCP owns JSON-shaped tool calls; the shell wrapper is only a compatibility and staging layer.
+This removes day-to-day quoting drift from the model layer. The C# native executor owns process launch and structured argv handling; MCP owns JSON-shaped tool calls; the Python wrapper turns those calls into one `invoke-b64` envelope when the target supports it and uses `win-remote-legacy` only for compatibility with older deployed targets.
 
 ## Run
 
@@ -59,7 +59,7 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - `win_run` and `win_capture` inherit the wrapper guardrails.
 - Raw `powershell.exe` / `pwsh` through those argv routes hits the default guard unless the caller explicitly enables the wrapper escape hatch.
 - If PowerShell or cmd script control is the lower-error route, use `win_exec` / `win_exec_capture`; the PowerShell-specific tools remain compatibility aliases.
-- The wrapper checks target native support before staged exec and staged file copy. Older targets that do not advertise `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64` use a structured compatibility path and emit a warning on stderr.
+- The wrapper checks target native support before using `invoke-b64`. Older targets fall back to `win-remote-legacy` until updated from a GitHub release asset.
 - Remote Windows paths should be passed with forward slashes or as quoted backslash strings. Drive-relative shapes such as `D:folderfile.py` are rejected before remote execution.
 
 ## WSL stance
@@ -74,6 +74,6 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 
 ## Required client stance
 
-For agent clients, use this MCP server over shelling out to `win-remote` directly whenever the tool is available. Shell remains useful for manual debugging, deployment, and compatibility, but MCP should be the default control plane for routine automation.
+For agent clients, use this MCP server over shelling out to `win-remote` directly whenever the tool is available. The shell shim remains useful for manual debugging, release deployment, and compatibility, but MCP should be the default control plane for routine automation.
 
-When a workflow cannot be represented by the existing MCP tools, add a native/MCP capability instead of teaching agents another quoting pattern. The purpose of this executor is to make spaces, quotes, Unicode, long scripts, and WSL arguments reliable by construction.
+When a workflow cannot be represented by the existing MCP tools, add an `invoke-b64` action plus MCP capability instead of teaching agents another quoting pattern. The purpose of this executor is to make spaces, quotes, Unicode, long scripts, and WSL arguments reliable by construction.

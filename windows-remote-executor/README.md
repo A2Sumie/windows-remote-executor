@@ -1,15 +1,15 @@
 # Windows Remote Executor
 
-This toolkit lets a macOS or Linux shell drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and a PowerShell fallback that does not depend on fragile local quoting.
+This toolkit lets a macOS or Linux host drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and staged script execution that does not depend on fragile local quoting.
 
-For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. The shell wrapper exists to resolve targets, upload payloads, and call the native executable; the native executable is responsible for structured argv, base64 payloads, process launch, output capture, WSL bridging, and SSH safety checks.
+For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. The `win-remote` wrapper is a Python CLI with a small shell shim; updated targets receive one `invoke-b64` JSON envelope, while `win-remote-legacy` remains only as a compatibility path for older deployed native executors.
 
 This is a hard stability boundary: if a task can be expressed as argv, script body, file upload/download, WSL program, scheduled-task query, or PowerShell file/stdin, use the native/MCP path. Avoid raw `cmd.exe`, raw `powershell.exe`, `wsl.exe ... bash -lc ...`, or hand-built Windows command strings in agent work.
 
 The intended steady state is:
 
-- direct native process launch, `scp`, and a native C# Windows executor for routine work
-- structured argv/base64 transport instead of quote-sensitive command strings
+- direct native process launch, staged `scp`, and a native C# Windows executor for routine work
+- a single structured `invoke-b64` envelope instead of quote-sensitive command strings
 - PowerShell or cmd script control only through the wrapper's staged exec bridge
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
@@ -199,7 +199,7 @@ gh release download vX.Y.Z -p 'windows-remote-executor-native-vX.Y.Z-fdd-win-x64
 ./windows-remote-executor/bin/win-remote update-tools winbox --native-zip /tmp/wre-release/windows-remote-executor-native-vX.Y.Z-fdd-win-x64.zip
 ```
 
-Local publish directories are for development verification. Remote executor updates should use GitHub release assets unless the operator explicitly asks for a local smoke deployment.
+Local publish directories are for development verification only. Production remote executor updates must use GitHub release assets.
 
 Inspect scheduled tasks without hand-writing PowerShell quoting:
 
@@ -229,7 +229,7 @@ When `access-policy.json` contains an access token hash, native commands such as
 - Remote paths should use forward slashes, for example `C:/CodexRemote/apps/myapp`.
 - A drive-relative path such as `D:StreamServauto_stream.py` is rejected locally because it usually means the caller forgot to quote `D:\StreamServ\auto_stream.py` and the local shell stripped backslashes.
 - `exec`, `exec-capture`, `cmd`, `tasks`, and staged `put/get` copy paths check whether the target native executor advertises the needed native command. Older targets that lack `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64` use a structured compatibility path and print a stderr warning; update the target release before depending on newer native-only routes such as `spawn-b64`.
-- For new automation, prefer adding a native subcommand or MCP tool over adding another shell quoting convention. The goal is to make spaces, quotes, non-ASCII text, and long scripts boring.
+- For new automation, prefer adding an `invoke-b64` action plus MCP/tool support over adding another shell quoting convention. The goal is to make spaces, quotes, non-ASCII text, and long scripts boring.
 - `probe`, `run`, `capture`, `py`, `exec`, `guard`, `repair`, and `policy` now prefer `C:/CodexRemote/tools/WindowsRemoteExecutor.cmd` and fall back to `C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe` when the launcher has not been installed yet.
 - `repair` is the explicit self-heal path for `sshd` config, host keys, scoped firewall state, and service startup.
 - Use `tasks` when you need scheduled-task state. It avoids the common `Get-ScheduledTaskInfo -TaskName ...` quoting failures around names with spaces.

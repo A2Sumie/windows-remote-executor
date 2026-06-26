@@ -58,7 +58,7 @@ internal static class OutputDecoding
             return new DetectedEncoding(Utf8NoBom, "utf-8");
         }
 
-        foreach (var encoding in EnumerateLegacyCandidates(preference))
+        foreach (var encoding in EnumerateLegacyCandidates(preference, skipUtf8: true))
         {
             return new DetectedEncoding(encoding, DescribeEncoding(encoding));
         }
@@ -176,7 +176,7 @@ internal static class OutputDecoding
         return evenNulls >= Math.Max(2, pairCount / 3) && oddNulls <= Math.Max(1, pairCount / 16);
     }
 
-    private static IEnumerable<Encoding> EnumerateLegacyCandidates(OutputEncodingPreference preference)
+    private static IEnumerable<Encoding> EnumerateLegacyCandidates(OutputEncodingPreference preference, bool skipUtf8)
     {
         if (preference == OutputEncodingPreference.Utf8)
         {
@@ -187,7 +187,7 @@ internal static class OutputDecoding
         var seen = new HashSet<int>();
         foreach (var codePage in new[] { GetConsoleOutputCodePage(), GetOemCodePage(), GetAnsiCodePage(), Encoding.Default.CodePage })
         {
-            if (codePage <= 0 || !seen.Add(codePage))
+            if (codePage <= 0 || (skipUtf8 && codePage == 65001) || !seen.Add(codePage))
             {
                 continue;
             }

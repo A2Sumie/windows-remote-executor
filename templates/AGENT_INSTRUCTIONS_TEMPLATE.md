@@ -11,7 +11,7 @@ Repository paths:
 - Native executor source: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
 
 Route rules:
-1. Prefer MCP tools for routine agent work. Use `win-remote` for manual debugging, deployment, and compatibility.
+1. Prefer MCP tools for routine agent work. Use `win-remote` for manual debugging, release deployment, and compatibility; updated targets use the `invoke-b64` envelope under the wrapper.
 2. Use `run`, `capture`, and `spawn` for concrete Windows executables with explicit argv.
 3. Use `capture` when process output needs stable parsing or raw bytes.
 4. Use `exec` / `exec-capture` with `--file` or `--stdin` for PowerShell/cmd script maintenance; these routes stage payloads through `exec-file-b64`.
@@ -41,7 +41,7 @@ Release workflow:
 2. Push to GitHub.
 3. Create and push a version tag.
 4. Let GitHub Actions build release assets.
-5. Deploy release assets with `win-remote update-tools --native-zip <release-asset.zip>`.
+5. Deploy release assets with `win-remote update-tools --native-zip <release-asset.zip>`; do not deploy production updates from local publish directories.
 ```
 
 ## Short Variant
@@ -49,5 +49,5 @@ Release workflow:
 Use this shorter version when the agent context window is tight.
 
 ```md
-Use this repo's Windows Remote Executor. Prefer MCP tools for routine control and `win-remote` for manual debugging. Choose the route with the lowest expected error rate: native argv for concrete executables, `capture` for parseable process output, staged `exec` for PowerShell/cmd scripts, `wsl`/`wsl-capture` for WSL argv, `wsl-sh` for longer WSL shell scripts, and `wsl-resident` for durable WSL services. The wrapper guards raw PowerShell in argv routes by default but has explicit escape hatches. `argv-only` rejects shell/interpreter executables through native argv routes while still allowing staged `exec-file-b64`. Keep targets private, keep policy and guardrails, keep WSL workloads on ext4, and verify with the route-specific smoke test.
+Use this repo's Windows Remote Executor. Prefer MCP tools for routine control and `win-remote` for manual debugging/release deployment. Updated targets use a single `invoke-b64` envelope under the wrapper; older targets fall back to `win-remote-legacy` until updated from a release asset. Choose the route with the lowest expected error rate: native argv for concrete executables, `capture` for parseable process output, staged `exec` for PowerShell/cmd scripts, `wsl`/`wsl-capture` for WSL argv, `wsl-sh` for longer WSL shell scripts, and `wsl-resident` for durable WSL services. The wrapper guards raw PowerShell in argv routes by default but has explicit escape hatches. `argv-only` rejects shell/interpreter executables through native argv routes while still allowing staged `exec-file-b64`. Keep targets private, keep policy and guardrails, keep WSL workloads on ext4, and verify with the route-specific smoke test.
 ```

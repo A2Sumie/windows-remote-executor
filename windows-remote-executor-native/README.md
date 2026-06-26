@@ -11,6 +11,8 @@ The current native CLI exposes:
 - `guard-sshd`
 - `repair-sshd`
 - `probe`
+- `selftest`
+- `invoke-b64`
 - `run-b64`
 - `capture-b64`
 - `mkdir-b64`
@@ -33,6 +35,10 @@ The current native CLI exposes:
 `repair-sshd` revalidates `sshd`, rewrites a known-good managed `sshd_config` when needed, regenerates host keys, reapplies scoped firewall and service settings, and brings the service back to `Running`.
 
 `probe` returns machine state plus the active exposure policy label, listen addresses, and whether an access token is required.
+
+`invoke-b64` accepts one base64url UTF-8 JSON envelope and dispatches actions such as `process.run`, `process.capture`, `script.run`, `script.capture`, `wsl.run`, `wsl.capture`, `file.copy`, `guard.run`, and `repair.run`. This is the preferred v2 route because user command text travels as structured data in one token.
+
+`selftest` validates the v2 envelope planner without touching Windows state and is safe to run during local build verification.
 
 `run-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, and the WSL commands execute payloads without depending on local shell quoting on the controlling machine. `exec-file-b64` is the preferred script bridge because the script body arrives as a staged file, not as a large base64 argv token.
 
@@ -98,6 +104,8 @@ Optional self-contained single-file publish:
 This produces `windows-remote-executor-native/publish/scd-win-x64/WindowsRemoteExecutor.Native.exe`. It is convenient for drop-and-run deployment but more likely to trigger generic `.NET packer/compression` heuristics because the runtime is embedded in the executable.
 
 `publish-win-x64.sh` is kept as a compatibility wrapper and currently points at the self-contained publish path.
+
+Production host updates should consume GitHub release assets, not local publish directories.
 
 ## Usage On Windows
 
