@@ -252,6 +252,9 @@ def cmd_exec(args: list[str], *, capture: bool) -> int:
             shell = normalize_exec_shell(pop_value(rest, option))
         elif capture and option == "--out":
             out_path = pop_value(rest, option)
+        elif option in {"--file", "--stdin"}:
+            rest.insert(0, option)
+            break
         else:
             raise WinRemoteError(f"Unknown {'exec-capture' if capture else 'exec'} option: {option}", 2)
 
@@ -282,7 +285,7 @@ def cmd_exec(args: list[str], *, capture: bool) -> int:
     remote_script = f"{stage_dir}/payload.{exec_suffix(shell)}"
     try:
         invoke(target, {"action": "file.mkdir", "path": stage_dir}, capture_output=True)
-        scp_to_remote(target, local_script, remote_script)
+        staged_upload_file(target, local_script, remote_script)
         request = {
             "action": "script.capture" if capture else "script.run",
             "kind": shell,
@@ -392,14 +395,18 @@ def cmd_put(args: list[str]) -> int:
     remote_path = normalize_remote_path(args[2])
     if not local_path.is_file():
         raise UnsupportedInvoke("v2 staged put currently handles files; using legacy for this path")
+    staged_upload_file(target, local_path, remote_path)
+    print("OK")
+    return 0
+
+
+def staged_upload_file(target: Target, local_path: Path, remote_path: str) -> None:
     stage_dir = f"{target.stage_root}/file-transfer-{stage_id()}"
     remote_stage_path = f"{stage_dir}/payload"
     try:
         invoke(target, {"action": "file.mkdir", "path": stage_dir}, capture_output=True)
         scp_to_remote(target, local_path, remote_stage_path)
         invoke(target, {"action": "file.copy", "source": remote_stage_path, "destination": remote_path}, capture_output=True)
-        print("OK")
-        return 0
     finally:
         try:
             invoke(target, {"action": "file.delete-tree", "path": stage_dir}, capture_output=True)
@@ -621,8 +628,8 @@ def run_remote_native(target: Target, native_args: list[str], *, capture_output:
     remote = build_remote_command(native_path, native_args)
     argv = [*target.ssh_args, target.ssh_destination, remote]
     if capture_output:
-        return subprocess.run(argv, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    return subprocess.run(argv, check=False).returncode
+        return subprocess.run(argv, text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    return subprocess.run(argv, stdin=subprocess.DEVNULL, check=False).returncode
 
 
 def resolve_native_path(target: Target) -> str:
@@ -654,7 +661,14 @@ def remote_file_exists(target: Target, remote_path: str) -> bool:
 
 def ssh_cmd(target: Target, code: str, *, capture_output: bool) -> subprocess.CompletedProcess[str]:
     remote = f'cmd.exe /v:off /d /s /c "{code}"'
-    return subprocess.run([*target.ssh_args, target.ssh_destination, remote], text=True, stdout=subprocess.PIPE if capture_output else None, stderr=subprocess.PIPE if capture_output else None, check=False)
+    return subprocess.run(
+        [*target.ssh_args, target.ssh_destination, remote],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        check=False,
+    )
 
 
 def build_remote_command(native_path: str, native_args: list[str]) -> str:
@@ -680,14 +694,14 @@ def quote_safe_native_arg(value: str) -> str:
 
 def scp_to_remote(target: Target, local_path: Path, remote_path: str) -> None:
     remote_path = normalize_remote_path(remote_path)
-    result = subprocess.run([*target.scp_args, str(local_path), f"{target.user}@{target.host}:{remote_path}"], check=False)
+    result = subprocess.run([*target.scp_args, str(local_path), f"{target.user}@{target.host}:{remote_path}"], stdin=subprocess.DEVNULL, check=False)
     if result.returncode != 0:
         raise WinRemoteError(f"scp upload failed with exit code {result.returncode}", result.returncode)
 
 
 def scp_from_remote(target: Target, remote_path: str, local_path: Path) -> None:
     remote_path = normalize_remote_path(remote_path)
-    result = subprocess.run([*target.scp_args, f"{target.user}@{target.host}:{remote_path}", str(local_path)], check=False)
+    result = subprocess.run([*target.scp_args, f"{target.user}@{target.host}:{remote_path}", str(local_path)], stdin=subprocess.DEVNULL, check=False)
     if result.returncode != 0:
         raise WinRemoteError(f"scp download failed with exit code {result.returncode}", result.returncode)
 
