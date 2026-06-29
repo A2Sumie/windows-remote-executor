@@ -777,15 +777,24 @@ internal static class RpcServer
         }
     }
 
+    private static string PsSingleQuote(string value)
+    {
+        return "'" + (value ?? string.Empty).Replace("'", "''") + "'";
+    }
+
     private static string BuildTasksPowerShell(IReadOnlyList<string> taskNames, string prefix)
     {
-        var taskNamesJson = JsonSerializer.Serialize(taskNames, RpcJson.Options);
-        var prefixJson = JsonSerializer.Serialize(prefix, RpcJson.Options);
+        // Embed the JSON as a single-quoted PowerShell string literal rather than a
+        // bare expression: a bare '[' starts a type-accelerator token, so
+        // "@([] | ConvertFrom-Json)" (and even ["a"]) fails to parse. Single-quoting
+        // (with ' doubled) keeps task names with apostrophes/$/backtick intact.
+        var taskNamesLiteral = PsSingleQuote(JsonSerializer.Serialize(taskNames, RpcJson.Options));
+        var prefixLiteral = PsSingleQuote(prefix);
         return $$"""
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$taskNames = @({{taskNamesJson}} | ConvertFrom-Json)
-$prefix = {{prefixJson}}
+$taskNames = @({{taskNamesLiteral}} | ConvertFrom-Json)
+$prefix = {{prefixLiteral}}
 $tasks = New-Object System.Collections.Generic.List[object]
 foreach ($taskName in $taskNames) {
   try {

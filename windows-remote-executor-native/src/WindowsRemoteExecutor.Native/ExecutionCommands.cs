@@ -1706,6 +1706,7 @@ internal static class WindowsProcessSpawner
     private const uint CreateBreakawayFromJob = 0x01000000;
     private const uint HandleFlagInherit = 0x00000001;
     private const int StdErrorHandle = -12;
+    private const int ErrorAccessDenied = 5;
     private const ushort SwHide = 0;
 
     public static SpawnProcessResult Spawn(SpawnProcessOptions options) =>
@@ -1744,21 +1745,52 @@ internal static class WindowsProcessSpawner
         var processInformation = new PROCESS_INFORMATION();
         var commandLine = BuildCommandLine(options.FilePath, options.Arguments);
         var applicationName = Path.IsPathFullyQualified(options.FilePath) ? options.FilePath : null;
+        var workingDirectory = string.IsNullOrWhiteSpace(options.WorkingDirectory) ? null : options.WorkingDirectory;
+
+        // The spawned process must outlive this rpc-stdio session. OpenSSH runs each
+        // session inside a job object with kill-on-close semantics, so without
+        // CREATE_BREAKAWAY_FROM_JOB the child is terminated the instant rpc-stdio
+        // writes its response and exits (observed on X570: the child never ran a
+        // single instruction). Break out of the job first; if the host's job
+        // forbids breakaway (CreateProcess fails with ERROR_ACCESS_DENIED) fall
+        // back to a plain detached process so non-job hosts still work.
+        var baseFlags = CreateNewProcessGroup | CreateNoWindow | DetachedProcess;
         var success = CreateProcessW(
             applicationName,
             new StringBuilder(commandLine),
             IntPtr.Zero,
             IntPtr.Zero,
             bInheritHandles: true,
-            CreateNewProcessGroup | CreateNoWindow,
+            baseFlags | CreateBreakawayFromJob,
             IntPtr.Zero,
-            string.IsNullOrWhiteSpace(options.WorkingDirectory) ? null : options.WorkingDirectory,
+            workingDirectory,
             ref startupInfo,
             out processInformation);
 
         if (!success)
         {
-            throw new Win32Exception(Marshal.GetLastWin32Error());
+            var error = Marshal.GetLastWin32Error();
+            if (error != ErrorAccessDenied)
+            {
+                throw new Win32Exception(error);
+            }
+
+            success = CreateProcessW(
+                applicationName,
+                new StringBuilder(commandLine),
+                IntPtr.Zero,
+                IntPtr.Zero,
+                bInheritHandles: true,
+                baseFlags,
+                IntPtr.Zero,
+                workingDirectory,
+                ref startupInfo,
+                out processInformation);
+
+            if (!success)
+            {
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
         }
 
         CloseHandle(processInformation.hThread);
