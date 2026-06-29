@@ -20,7 +20,6 @@ python3 -m unittest discover -s "${TOOL_ROOT}/tests"
 
 status "Shell script syntax"
 bash -n "${TOOL_ROOT}/bin/win-remote"
-bash -n "${TOOL_ROOT}/bin/win-remote-legacy"
 bash -n "${TOOL_ROOT}/scripts/verify-remote-cases.sh"
 bash -n "${TOOL_ROOT}/scripts/verify-v3-remote-cases.sh"
 bash -n "${TOOL_ROOT}/scripts/make-bootstrap-package.sh"

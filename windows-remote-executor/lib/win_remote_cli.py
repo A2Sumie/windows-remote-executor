@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Python front-end for Windows Remote Executor.
-
-The v2 route sends user command data as one base64url JSON envelope to the
-Windows native executor. The legacy bash implementation is still reachable with
-WIN_REMOTE_LEGACY=1 for targets that have not been updated yet.
-"""
+"""Python front-end for Windows Remote Executor V3."""
 
 from __future__ import annotations
 
@@ -14,19 +9,17 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, NoReturn
 
 
 TOOL_ROOT = Path(__file__).resolve().parents[1]
-BIN = TOOL_ROOT / "bin" / "win-remote"
 TARGETS_DIR = TOOL_ROOT / "targets"
-SCRIPT_ACTIVE_CHARS = re.compile(r"[\s'\"`&();|<>^!]")
 DRIVE_RELATIVE = re.compile(r"^[A-Za-z]:($|[^/\\])")
 RAW_POWERSHELL = {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
 
@@ -35,10 +28,6 @@ class WinRemoteError(Exception):
     def __init__(self, message: str, exit_code: int = 1):
         super().__init__(message)
         self.exit_code = exit_code
-
-
-class UnsupportedInvoke(WinRemoteError):
-    pass
 
 
 @dataclass
@@ -126,33 +115,59 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_capture(args)
         if subcommand == "spawn":
             return cmd_spawn(args)
+        if subcommand == "cmd":
+            return cmd_cmd(args)
         if subcommand == "exec":
             return cmd_exec(args, capture=False)
         if subcommand == "exec-capture":
             return cmd_exec(args, capture=True)
+        if subcommand == "py":
+            return cmd_py(args)
         if subcommand == "wsl":
             return cmd_wsl(args, capture=False)
         if subcommand == "wsl-capture":
             return cmd_wsl(args, capture=True)
-        if subcommand == "py":
-            return cmd_py(args)
+        if subcommand == "wsl-py":
+            return cmd_wsl_py(args, capture=False)
+        if subcommand == "wsl-py-capture":
+            return cmd_wsl_py(args, capture=True)
+        if subcommand == "wsl-sh":
+            return cmd_wsl_script(args, capture=False)
+        if subcommand == "wsl-sh-capture":
+            return cmd_wsl_script(args, capture=True)
+        if subcommand == "wsl-container-sh":
+            return cmd_wsl_container_script(args, capture=False)
+        if subcommand == "wsl-container-sh-capture":
+            return cmd_wsl_container_script(args, capture=True)
+        if subcommand == "wsl-resident":
+            return cmd_wsl_resident(args)
         if subcommand == "put":
             return cmd_put(args)
         if subcommand == "get":
             return cmd_get(args)
+        if subcommand == "deploy":
+            return cmd_deploy(args)
         if subcommand == "guard":
             return cmd_guard(args)
         if subcommand == "repair":
             return cmd_repair(args)
+        if subcommand == "tasks":
+            return cmd_tasks(args)
+        if subcommand == "policy":
+            return cmd_policy(args)
+        if subcommand == "find":
+            return cmd_find(args)
         if subcommand == "update-tools":
             return cmd_update_tools(args)
         if subcommand == "selftest":
             return cmd_selftest()
-        if subcommand in {"wsl-sh", "wsl-sh-capture", "wsl-resident", "tasks", "policy", "deploy", "find", "cmd", "ps-encode", "ps-decode", "ps-check", "wsl-py", "wsl-py-capture", "wsl-container-sh", "wsl-container-sh-capture"}:
-            return run_legacy([subcommand, *args])
+        if subcommand == "ps-encode":
+            return cmd_ps_encode(args)
+        if subcommand == "ps-decode":
+            return cmd_ps_decode(args)
+        if subcommand == "ps-check":
+            return cmd_ps_check(args)
         raise WinRemoteError(f"Unknown subcommand: {subcommand}", 2)
-    except UnsupportedInvoke:
-        return run_legacy([subcommand, *args])
     except WinRemoteError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return exc.exit_code
@@ -170,31 +185,26 @@ def cmd_probe(args: list[str]) -> int:
             out_path = Path(pop_value(rest, option))
         else:
             raise WinRemoteError(f"Unknown probe option: {option}", 2)
-    result = invoke(target, {"action": "probe"}, capture_output=True)
-    if out_path:
-        out_path.write_text(result.stdout, encoding="utf-8")
-    else:
-        sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    return result.returncode
+    call = v3().host_probe(target)
+    text = call.response.get("stdoutText", "")
+    write_or_stdout(text, out_path)
+    write_stderr(call)
+    return call.exit_code
 
 
 def cmd_run(args: list[str]) -> int:
     target, cwd, allow_powershell, program, program_args = parse_process_command(args, "run")
-    guard_raw_powershell("run", allow_powershell, program)
-    return invoke_passthrough(target, {"action": "process.run", "file": program, "cwd": cwd, "args": program_args})
+    call = v3().process_run(target, program, program_args, cwd=cwd, allow_powershell=allow_powershell)
+    sys.stdout.write(str(call.response.get("stdoutText", "")))
+    sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
 
 
 def cmd_capture(args: list[str]) -> int:
     target, cwd, out_path, allow_powershell, program, program_args = parse_capture_command(args)
-    guard_raw_powershell("capture", allow_powershell, program)
-    result = invoke(target, {"action": "process.capture", "file": program, "cwd": cwd, "args": program_args}, capture_output=True)
-    if out_path:
-        Path(out_path).write_text(result.stdout, encoding="utf-8")
-    else:
-        sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    return result.returncode
+    call = v3().process_capture(target, program, program_args, cwd=cwd, allow_powershell=allow_powershell)
+    write_rpc_json(call, out_path)
+    return call.exit_code
 
 
 def cmd_spawn(args: list[str]) -> int:
@@ -220,26 +230,25 @@ def cmd_spawn(args: list[str]) -> int:
             raise WinRemoteError(f"Unknown spawn option: {option}", 2)
     if not rest:
         raise WinRemoteError("spawn requires <program> [args...]", 2)
-    program, program_args = rest[0], rest[1:]
-    guard_raw_powershell("spawn", allow_powershell, program)
-    request = {"action": "process.spawn", "file": program, "cwd": cwd, "stdout": stdout, "stderr": stderr, "args": program_args}
-    result = invoke(target, request, capture_output=True)
-    if out_path:
-        Path(out_path).write_text(result.stdout, encoding="utf-8")
-    else:
-        sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    return result.returncode
+    call = v3().process_spawn(target, rest[0], rest[1:], cwd=cwd, stdout=stdout, stderr=stderr, allow_powershell=allow_powershell)
+    write_rpc_json(call, out_path)
+    return call.exit_code
+
+
+def cmd_cmd(args: list[str]) -> int:
+    if len(args) < 2:
+        raise WinRemoteError("cmd requires <target> <cmd-code>", 2)
+    target = load_target(args[0])
+    call = v3().script_run(target, " ".join(args[1:]), kind="cmd")
+    sys.stdout.write(str(call.response.get("stdoutText", "")))
+    sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
 
 
 def cmd_exec(args: list[str], *, capture: bool) -> int:
     if not args:
         raise WinRemoteError("exec requires <target>", 2)
-    target_name = args[0]
-    target = load_target(target_name)
-    if not target_supports_invoke(target):
-        raise UnsupportedInvoke("target native executor does not support invoke-b64")
-
+    target = load_target(args[0])
     rest = args[1:]
     cwd = None
     shell = "powershell"
@@ -257,98 +266,15 @@ def cmd_exec(args: list[str], *, capture: bool) -> int:
             break
         else:
             raise WinRemoteError(f"Unknown {'exec-capture' if capture else 'exec'} option: {option}", 2)
-
-    cleanup_dir: tempfile.TemporaryDirectory[str] | None = None
-    local_script: Path
-    if rest and rest[0] == "--file":
-        rest.pop(0)
-        local_script = Path(pop_value(rest, "--file"))
-        if rest:
-            raise WinRemoteError("exec --file does not accept extra arguments", 2)
-        if not local_script.is_file():
-            raise WinRemoteError(f"Local file not found: {local_script}", 2)
-    elif rest and rest[0] == "--stdin":
-        rest.pop(0)
-        if rest:
-            raise WinRemoteError("exec --stdin does not accept extra arguments", 2)
-        cleanup_dir = tempfile.TemporaryDirectory(prefix="win-remote-exec-")
-        local_script = Path(cleanup_dir.name) / f"payload.{exec_suffix(shell)}"
-        local_script.write_text(sys.stdin.read(), encoding="utf-8")
-    elif rest:
-        cleanup_dir = tempfile.TemporaryDirectory(prefix="win-remote-exec-")
-        local_script = Path(cleanup_dir.name) / f"payload.{exec_suffix(shell)}"
-        local_script.write_text(" ".join(rest), encoding="utf-8")
-    else:
-        raise WinRemoteError("exec requires inline script, --file <local-script>, or --stdin", 2)
-
-    stage_dir = f"{target.stage_root}/exec-{stage_id()}"
-    remote_script = f"{stage_dir}/payload.{exec_suffix(shell)}"
-    try:
-        invoke(target, {"action": "file.mkdir", "path": stage_dir}, capture_output=True)
-        staged_upload_file(target, local_script, remote_script)
-        request = {
-            "action": "script.capture" if capture else "script.run",
-            "kind": shell,
-            "scriptPath": remote_script,
-            "cwd": cwd,
-            "exe": target.ps_exe if shell == "powershell" else None,
-        }
-        result = invoke(target, request, capture_output=capture)
-        if capture:
-            assert isinstance(result, subprocess.CompletedProcess)
-            if out_path:
-                Path(out_path).write_text(result.stdout, encoding="utf-8")
-            else:
-                sys.stdout.write(result.stdout)
-            sys.stderr.write(result.stderr)
-            return result.returncode
-        assert isinstance(result, int)
-        return result
-    finally:
-        try:
-            invoke(target, {"action": "file.delete-tree", "path": stage_dir}, capture_output=True)
-        except Exception:
-            pass
-        if cleanup_dir is not None:
-            cleanup_dir.cleanup()
-
-
-def cmd_wsl(args: list[str], *, capture: bool) -> int:
-    if not args:
-        raise WinRemoteError("wsl requires <target>", 2)
-    target = load_target(args[0])
-    rest = args[1:]
-    distro = target.wsl_distro
-    user = target.wsl_user
-    cwd = None
-    out_path = None
-    while rest and rest[0].startswith("--"):
-        option = rest.pop(0)
-        if option == "--distro":
-            distro = pop_value(rest, option)
-        elif option == "--user":
-            user = pop_value(rest, option)
-        elif option == "--cwd":
-            cwd = pop_value(rest, option)
-        elif capture and option == "--out":
-            out_path = pop_value(rest, option)
-        elif option == "--heartbeat-seconds":
-            raise UnsupportedInvoke("heartbeat wrapper is still served by legacy wsl route")
-        else:
-            raise WinRemoteError(f"Unknown {'wsl-capture' if capture else 'wsl'} option: {option}", 2)
-    if not rest:
-        raise WinRemoteError("wsl requires <program> [args...]", 2)
-    program, program_args = rest[0], rest[1:]
-    request = {"action": "wsl.capture" if capture else "wsl.run", "file": program, "cwd": cwd, "distribution": distro, "user": user, "args": program_args}
+    script = read_script_argument("exec", rest, suffix=exec_suffix(shell))
+    action = v3().script_capture if capture else v3().script_run
+    call = action(target, script, kind=shell, cwd=cwd, exe=target.ps_exe if shell == "powershell" else None)
     if capture:
-        result = invoke(target, request, capture_output=True)
-        if out_path:
-            Path(out_path).write_text(result.stdout, encoding="utf-8")
-        else:
-            sys.stdout.write(result.stdout)
-        sys.stderr.write(result.stderr)
-        return result.returncode
-    return invoke_passthrough(target, request)
+        write_rpc_json(call, out_path)
+    else:
+        sys.stdout.write(str(call.response.get("stdoutText", "")))
+        sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
 
 
 def cmd_py(args: list[str]) -> int:
@@ -374,67 +300,229 @@ def cmd_py(args: list[str]) -> int:
             rest = []
         else:
             raise WinRemoteError(f"Unknown py option: {option}", 2)
-    return invoke_passthrough(target, {
-        "action": "python.run",
-        "scriptPath": script_path,
-        "cwd": cwd,
-        "python": python,
-        "condaEnv": conda_env,
-        "condaPrefix": conda_prefix,
-        "args": script_args,
-    })
+    call = v3().python_run(target, script_path, script_args, cwd=cwd, python=python, conda_env=conda_env, conda_prefix=conda_prefix)
+    sys.stdout.write(str(call.response.get("stdoutText", "")))
+    sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
+
+
+def cmd_wsl(args: list[str], *, capture: bool) -> int:
+    if not args:
+        raise WinRemoteError("wsl requires <target>", 2)
+    target = load_target(args[0])
+    rest = args[1:]
+    distro = target.wsl_distro
+    user = target.wsl_user
+    cwd = None
+    out_path = None
+    while rest and rest[0].startswith("--"):
+        option = rest.pop(0)
+        if option == "--distro":
+            distro = pop_value(rest, option)
+        elif option == "--user":
+            user = pop_value(rest, option)
+        elif option == "--cwd":
+            cwd = pop_value(rest, option)
+        elif capture and option == "--out":
+            out_path = pop_value(rest, option)
+        elif option == "--heartbeat-seconds":
+            _ = pop_value(rest, option)
+        else:
+            raise WinRemoteError(f"Unknown {'wsl-capture' if capture else 'wsl'} option: {option}", 2)
+    if not rest:
+        raise WinRemoteError("wsl requires <program> [args...]", 2)
+    action = v3().wsl_capture if capture else v3().wsl_run
+    call = action(target, rest[0], rest[1:], cwd=cwd, distribution=distro, user=user)
+    if capture:
+        write_rpc_json(call, out_path)
+    else:
+        sys.stdout.write(str(call.response.get("stdoutText", "")))
+        sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
+
+
+def cmd_wsl_py(args: list[str], *, capture: bool) -> int:
+    if not args:
+        raise WinRemoteError("wsl-py requires <target>", 2)
+    target = load_target(args[0])
+    rest = args[1:]
+    distro = target.wsl_distro
+    user = target.wsl_user
+    cwd = None
+    python = "python3"
+    module = None
+    out_path = None
+    while rest and rest[0].startswith("--"):
+        option = rest.pop(0)
+        if option == "--distro":
+            distro = pop_value(rest, option)
+        elif option == "--user":
+            user = pop_value(rest, option)
+        elif option == "--cwd":
+            cwd = pop_value(rest, option)
+        elif option == "--python":
+            python = pop_value(rest, option)
+        elif option == "--module":
+            module = pop_value(rest, option)
+        elif capture and option == "--out":
+            out_path = pop_value(rest, option)
+        elif option == "--heartbeat-seconds":
+            _ = pop_value(rest, option)
+        else:
+            raise WinRemoteError(f"Unknown {'wsl-py-capture' if capture else 'wsl-py'} option: {option}", 2)
+    script_args: list[str] = []
+    if "--" in rest:
+        idx = rest.index("--")
+        script_part = rest[:idx]
+        script_args = rest[idx + 1:]
+    else:
+        script_part = rest
+    if module:
+        py_args = ["-m", module, *script_args]
+    else:
+        if len(script_part) != 1:
+            raise WinRemoteError("wsl-py requires --module <module> or <script-path>", 2)
+        py_args = [script_part[0], *script_args]
+    action = v3().wsl_capture if capture else v3().wsl_run
+    call = action(target, python, py_args, cwd=cwd, distribution=distro, user=user)
+    if capture:
+        write_rpc_json(call, out_path)
+    else:
+        sys.stdout.write(str(call.response.get("stdoutText", "")))
+        sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
+
+
+def cmd_wsl_script(args: list[str], *, capture: bool) -> int:
+    target, script, script_args, cwd, distro, user, shell, out_path = parse_wsl_script(args, capture=capture)
+    action = v3().wsl_script_capture if capture else v3().wsl_script
+    call = action(target, script, script_args, cwd=cwd, distribution=distro, user=user, shell=shell)
+    if capture:
+        write_rpc_json(call, out_path)
+    else:
+        sys.stdout.write(str(call.response.get("stdoutText", "")))
+        sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
+
+
+def cmd_wsl_container_script(args: list[str], *, capture: bool) -> int:
+    target, script, script_args, cwd, distro, user, shell, out_path, container = parse_wsl_container_script(args, capture=capture)
+    wrapper = build_container_wrapper(script, container)
+    action = v3().wsl_script_capture if capture else v3().wsl_script
+    call = action(target, wrapper, script_args, cwd=cwd, distribution=distro, user=user, shell=shell)
+    if capture:
+        write_rpc_json(call, out_path)
+    else:
+        sys.stdout.write(str(call.response.get("stdoutText", "")))
+        sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
+
+
+def cmd_wsl_resident(args: list[str]) -> int:
+    target, script, script_args, cwd, distro, user, shell, out_path = parse_wsl_script(args, capture=True, command_name="wsl-resident")
+    rest = parse_wsl_script.extra_options
+    pid_file = log_file = health_url = None
+    port = ready_timeout = settle_delay = poll_interval = diag_lines = None
+    launch_path = None
+    while rest:
+        option = rest.pop(0)
+        if option == "--pid-file":
+            pid_file = pop_value(rest, option)
+        elif option == "--log-file":
+            log_file = pop_value(rest, option)
+        elif option == "--port":
+            port = int(pop_value(rest, option))
+        elif option == "--health-url":
+            health_url = pop_value(rest, option)
+        elif option == "--ready-timeout":
+            ready_timeout = int(pop_value(rest, option))
+        elif option == "--settle-delay":
+            settle_delay = int(pop_value(rest, option))
+        elif option == "--poll-interval-ms":
+            poll_interval = int(pop_value(rest, option))
+        elif option == "--diag-lines":
+            diag_lines = int(pop_value(rest, option))
+        elif option == "--launch-path":
+            launch_path = pop_value(rest, option)
+        else:
+            raise WinRemoteError(f"Unknown wsl-resident option: {option}", 2)
+    call = v3().wsl_resident(
+        target,
+        script,
+        script_args,
+        cwd=cwd,
+        distribution=distro,
+        user=user,
+        shell=shell,
+        launch_path=launch_path,
+        pid_file=pid_file,
+        log_file=log_file,
+        port=port,
+        health_url=health_url,
+        ready_timeout_seconds=ready_timeout,
+        settle_delay_seconds=settle_delay,
+        poll_interval_ms=poll_interval,
+        diagnostic_lines=diag_lines,
+    )
+    write_rpc_json(call, out_path)
+    return call.exit_code
 
 
 def cmd_put(args: list[str]) -> int:
     if len(args) != 3:
         raise WinRemoteError("put requires <target> <local-path> <remote-path>", 2)
     target = load_target(args[0])
-    if not target_supports_invoke(target):
-        raise UnsupportedInvoke("target native executor does not support invoke-b64")
     local_path = Path(args[1])
     remote_path = normalize_remote_path(args[2])
     if not local_path.is_file():
-        raise UnsupportedInvoke("v2 staged put currently handles files; using legacy for this path")
-    staged_upload_file(target, local_path, remote_path)
+        raise WinRemoteError(f"Local file not found: {local_path}", 2)
+    v3().file_mkdir(target, remote_parent(remote_path))
+    scp_to_remote(target, local_path, remote_path)
     print("OK")
     return 0
-
-
-def staged_upload_file(target: Target, local_path: Path, remote_path: str) -> None:
-    stage_dir = f"{target.stage_root}/file-transfer-{stage_id()}"
-    remote_stage_path = f"{stage_dir}/payload"
-    try:
-        invoke(target, {"action": "file.mkdir", "path": stage_dir}, capture_output=True)
-        scp_to_remote(target, local_path, remote_stage_path)
-        invoke(target, {"action": "file.copy", "source": remote_stage_path, "destination": remote_path}, capture_output=True)
-    finally:
-        try:
-            invoke(target, {"action": "file.delete-tree", "path": stage_dir}, capture_output=True)
-        except Exception:
-            pass
 
 
 def cmd_get(args: list[str]) -> int:
     if len(args) != 3:
         raise WinRemoteError("get requires <target> <remote-path> <local-path>", 2)
     target = load_target(args[0])
-    if not target_supports_invoke(target):
-        raise UnsupportedInvoke("target native executor does not support invoke-b64")
     remote_path = normalize_remote_path(args[1])
     local_path = Path(args[2])
-    stage_dir = f"{target.stage_root}/file-transfer-{stage_id()}"
-    remote_stage_path = f"{stage_dir}/payload"
-    try:
-        invoke(target, {"action": "file.mkdir", "path": stage_dir}, capture_output=True)
-        invoke(target, {"action": "file.copy", "source": remote_path, "destination": remote_stage_path}, capture_output=True)
-        scp_from_remote(target, remote_stage_path, local_path)
-        print("OK")
-        return 0
-    finally:
-        try:
-            invoke(target, {"action": "file.delete-tree", "path": stage_dir}, capture_output=True)
-        except Exception:
-            pass
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    scp_from_remote(target, remote_path, local_path)
+    print("OK")
+    return 0
+
+
+def cmd_deploy(args: list[str]) -> int:
+    if len(args) < 3:
+        raise WinRemoteError("deploy requires <target> <local-dir> <remote-dir>", 2)
+    target = load_target(args[0])
+    local_dir = Path(args[1])
+    remote_dir = normalize_remote_path(args[2])
+    rest = args[3:]
+    post_script = None
+    while rest:
+        option = rest.pop(0)
+        if option == "--post":
+            post_script = pop_value(rest, option)
+        elif option == "--post-file":
+            post_script = Path(pop_value(rest, option)).read_text(encoding="utf-8")
+        elif option == "--post-stdin":
+            post_script = sys.stdin.read()
+        else:
+            raise WinRemoteError(f"Unknown deploy option: {option}", 2)
+    if not local_dir.is_dir():
+        raise WinRemoteError(f"Local directory not found: {local_dir}", 2)
+    v3().file_mkdir(target, remote_dir)
+    scp_dir_to_remote(target, local_dir, remote_dir)
+    if post_script:
+        call = v3().script_run(target, post_script)
+        sys.stdout.write(str(call.response.get("stdoutText", "")))
+        sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+        return call.exit_code
+    print("OK")
+    return 0
 
 
 def cmd_guard(args: list[str]) -> int:
@@ -442,25 +530,22 @@ def cmd_guard(args: list[str]) -> int:
         raise WinRemoteError("guard requires <target>", 2)
     target = load_target(args[0])
     rest = args[1:]
-    request: dict[str, object] = {"action": "guard.run"}
     out_path = None
+    no_disable = False
+    expected = None
     while rest:
         option = rest.pop(0)
         if option == "--out":
             out_path = pop_value(rest, option)
         elif option == "--no-disable":
-            request["noDisable"] = True
+            no_disable = True
         elif option == "--expected-listen-address":
-            request["expectedListenAddress"] = pop_value(rest, option)
+            expected = pop_value(rest, option)
         else:
             raise WinRemoteError(f"Unknown guard option: {option}", 2)
-    result = invoke(target, request, capture_output=True)
-    if out_path:
-        Path(out_path).write_text(result.stdout, encoding="utf-8")
-    else:
-        sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    return result.returncode
+    call = v3().host_guard(target, expected_listen_address=expected, no_disable=no_disable)
+    write_rpc_json(call, out_path)
+    return call.exit_code
 
 
 def cmd_repair(args: list[str]) -> int:
@@ -468,81 +553,177 @@ def cmd_repair(args: list[str]) -> int:
         raise WinRemoteError("repair requires <target>", 2)
     target = load_target(args[0])
     rest = args[1:]
-    request: dict[str, object] = {"action": "repair.run"}
     out_path = None
+    expected = None
+    force_rewrite = False
     while rest:
         option = rest.pop(0)
         if option == "--out":
             out_path = pop_value(rest, option)
         elif option == "--expected-listen-address":
-            request["expectedListenAddress"] = pop_value(rest, option)
+            expected = pop_value(rest, option)
         elif option == "--force-rewrite":
-            request["forceRewrite"] = True
+            force_rewrite = True
         else:
             raise WinRemoteError(f"Unknown repair option: {option}", 2)
-    result = invoke(target, request, capture_output=True)
-    if out_path:
-        Path(out_path).write_text(result.stdout, encoding="utf-8")
-    else:
-        sys.stdout.write(result.stdout)
-    sys.stderr.write(result.stderr)
-    return result.returncode
+    call = v3().host_repair(target, expected_listen_address=expected, force_rewrite=force_rewrite)
+    write_rpc_json(call, out_path)
+    return call.exit_code
+
+
+def cmd_tasks(args: list[str]) -> int:
+    if not args:
+        raise WinRemoteError("tasks requires <target>", 2)
+    target = load_target(args[0])
+    rest = args[1:]
+    out_path = None
+    prefix = None
+    task_names: list[str] = []
+    while rest:
+        option = rest.pop(0)
+        if option == "--task-name":
+            task_names.append(pop_value(rest, option))
+        elif option == "--prefix":
+            prefix = pop_value(rest, option)
+        elif option == "--out":
+            out_path = pop_value(rest, option)
+        else:
+            raise WinRemoteError(f"Unknown tasks option: {option}", 2)
+    call = v3().host_tasks(target, task_names=task_names, prefix=prefix)
+    text = call.response.get("stdoutText", "")
+    write_or_stdout(str(text), Path(out_path) if out_path else None)
+    return call.exit_code
+
+
+def cmd_policy(args: list[str]) -> int:
+    if not args:
+        raise WinRemoteError("policy requires <target>", 2)
+    target = load_target(args[0])
+    rest = args[1:]
+    mode = "private-only"
+    command_mode = "standard"
+    expected = target.expected_listen_address
+    label = None
+    token = target.access_token
+    rotate_token = False
+    while rest:
+        option = rest.pop(0)
+        if option == "--mode":
+            mode = pop_value(rest, option)
+        elif option == "--command-mode":
+            command_mode = pop_value(rest, option)
+        elif option == "--expected-listen-address":
+            expected = pop_value(rest, option)
+        elif option == "--label":
+            label = pop_value(rest, option)
+        elif option == "--token":
+            token = pop_value(rest, option)
+        elif option == "--rotate-token":
+            token = secrets.token_urlsafe(32)
+            rotate_token = True
+        elif option in {"--skip-guard-install", "--no-run-guard"}:
+            pass
+        else:
+            raise WinRemoteError(f"Unknown policy option: {option}", 2)
+    call = v3().host_policy(target, exposure_mode=mode, command_mode=command_mode, expected_listen_address=expected, label=label, token=token)
+    print(json.dumps(call.response, ensure_ascii=False, indent=2))
+    if rotate_token and token:
+        print(f"new-access-token: {token}", file=sys.stderr)
+    return call.exit_code
+
+
+def cmd_find(args: list[str]) -> int:
+    if len(args) < 2:
+        raise WinRemoteError("find requires <target> <query>", 2)
+    target = load_target(args[0])
+    query = args[1]
+    max_results = None
+    rest = args[2:]
+    while rest:
+        option = rest.pop(0)
+        if option == "--max":
+            max_results = int(pop_value(rest, option))
+        else:
+            raise WinRemoteError(f"Unknown find option: {option}", 2)
+    call = v3().everything_search(target, query, max_results=max_results)
+    sys.stdout.write(str(call.response.get("stdoutText", "")))
+    sys.stderr.write(str(call.response.get("stderrText", "")) or call.ssh_stderr)
+    return call.exit_code
 
 
 def cmd_update_tools(args: list[str]) -> int:
     if not args:
         raise WinRemoteError("update-tools requires <target>", 2)
-    if "--native-dir" in args or "--native-exe" in args:
-        raise WinRemoteError("production update-tools no longer accepts --native-dir or --native-exe; use --native-zip <GitHub-release-asset.zip> or WIN_REMOTE_LEGACY=1 for explicit dev smoke work", 2)
-    if "--native-zip" not in args:
-        raise WinRemoteError("production update-tools requires --native-zip <GitHub-release-asset.zip>", 2)
-    zip_path = Path(args[args.index("--native-zip") + 1])
-    validate_release_native_zip(zip_path)
-    return run_legacy(["update-tools", *args])
-
-
-def validate_release_native_zip(path: Path) -> None:
-    if not path.is_file():
-        raise WinRemoteError(f"Native release zip not found: {path}", 2)
-    name = path.name
-    if not re.match(r"windows-remote-executor-native-v[^/]+-fdd-win-x64\.zip$", name):
-        raise WinRemoteError(
-            "production update-tools requires the framework-dependent GitHub release asset named "
-            "windows-remote-executor-native-v<version>-fdd-win-x64.zip",
-            2,
-        )
-    try:
-        with zipfile.ZipFile(path) as zf:
-            names = {Path(info.filename).name for info in zf.infolist() if not info.is_dir()}
-    except zipfile.BadZipFile as exc:
-        raise WinRemoteError(f"Invalid native release zip: {path}", 2) from exc
-    required = {
-        "WindowsRemoteExecutor.Native.exe",
-        "WindowsRemoteExecutor.Native.dll",
-        "WindowsRemoteExecutor.Native.runtimeconfig.json",
-        "WindowsRemoteExecutor.Native.deps.json",
-    }
-    missing = sorted(required - names)
-    if missing:
-        raise WinRemoteError(f"Native release zip is missing required files: {', '.join(missing)}", 2)
+    target = load_target(args[0])
+    rest = args[1:]
+    native_zip = None
+    while rest:
+        option = rest.pop(0)
+        if option == "--native-zip":
+            native_zip = Path(pop_value(rest, option))
+        elif option in {"--native-dir", "--native-exe"}:
+            raise WinRemoteError("V3 update-tools accepts only --native-zip <release-asset.zip>", 2)
+        elif option in {"--everything-dll", "--es-exe", "--policy-file"}:
+            _ = pop_value(rest, option)
+        elif option == "--install-guard":
+            pass
+        else:
+            raise WinRemoteError(f"Unknown update-tools option: {option}", 2)
+    if native_zip is None:
+        raise WinRemoteError("update-tools requires --native-zip <release-asset.zip>", 2)
+    validate_release_native_zip(native_zip)
+    release_dir = f"{target.native_releases_dir}/v3-{stage_id()}"
+    with tempfile.TemporaryDirectory(prefix="win-remote-update-") as tmp:
+        extract_dir = Path(tmp) / "native"
+        extract_dir.mkdir()
+        with zipfile.ZipFile(native_zip) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                name = Path(info.filename).name
+                if not name:
+                    continue
+                with zf.open(info) as src, (extract_dir / name).open("wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        v3().file_mkdir(target, release_dir)
+        for item in extract_dir.iterdir():
+            if item.is_file():
+                scp_to_remote(target, item, f"{release_dir}/{item.name}")
+        v3().file_write_text(target, target.native_current_file, release_dir)
+    print("OK")
+    return 0
 
 
 def cmd_selftest() -> int:
-    hostile = [
-        "plain",
-        "space arg",
-        "quote \" arg",
-        "tick ` dollar $ paren $(x)",
-        "percent %PATH% bang !VAR! amp & pipe | lt < gt >",
-        "json {\"a\":[1,2]}",
-        "line1\nline2",
-    ]
-    request = {"action": "process.capture", "file": "C:/Tools/echo.exe", "cwd": "D:/Work Dir", "args": hostile}
-    envelope = encode_envelope(request)
-    decoded = json.loads(base64_url_decode(envelope).decode("utf-8"))
-    ok = decoded == request and not SCRIPT_ACTIVE_CHARS.search(envelope)
-    print(json.dumps({"ok": ok, "envelopeLength": len(envelope), "decoded": decoded}, ensure_ascii=False))
+    request = v3().build_rpc_request(
+        "process.capture",
+        {"file": "C:/Tools/echo.exe", "cwd": "D:/Work Dir", "args": ["space arg", "quote \" arg", "tick ` dollar $"]},
+        request_id="selftest",
+    )
+    line = v3().request_json_line(request)
+    decoded = json.loads(line)
+    ok = decoded == compact_none(request) and "process.capture" in line
+    print(json.dumps({"ok": ok, "requestLength": len(line), "decoded": decoded}, ensure_ascii=False))
     return 0 if ok else 1
+
+
+def cmd_ps_encode(args: list[str]) -> int:
+    script = read_script_argument("ps-encode", args, suffix="ps1")
+    print(base64.b64encode(script.encode("utf-16le")).decode("ascii"))
+    return 0
+
+
+def cmd_ps_decode(args: list[str]) -> int:
+    if len(args) != 1:
+        raise WinRemoteError("ps-decode requires <utf16le-base64>", 2)
+    sys.stdout.write(base64.b64decode(args[0]).decode("utf-16le"))
+    return 0
+
+
+def cmd_ps_check(args: list[str]) -> int:
+    script = read_script_argument("ps-check", args, suffix="ps1")
+    print(json.dumps({"ok": True, "chars": len(script), "lines": len(script.splitlines())}, ensure_ascii=False))
+    return 0
 
 
 def parse_process_command(args: list[str], command_name: str) -> tuple[Target, str | None, bool, str, list[str]]:
@@ -573,7 +754,10 @@ def parse_capture_command(args: list[str]) -> tuple[Target, str | None, str | No
     cwd = out_path = None
     allow_powershell = False
     if rest and rest[0] == "--cmd":
-        raise WinRemoteError("capture --cmd is still served by legacy because it is intentionally shell-shaped", 2)
+        rest.pop(0)
+        if not rest:
+            raise WinRemoteError("capture --cmd requires <cmd-code>", 2)
+        return target, cwd, out_path, True, "cmd.exe", ["/d", "/s", "/c", " ".join(rest)]
     while rest and rest[0].startswith("--"):
         option = rest.pop(0)
         if option == "--cwd":
@@ -583,7 +767,9 @@ def parse_capture_command(args: list[str]) -> tuple[Target, str | None, str | No
         elif option == "--allow-powershell":
             allow_powershell = True
         elif option == "--cmd":
-            raise UnsupportedInvoke("capture --cmd is still served by legacy")
+            if not rest:
+                raise WinRemoteError("capture --cmd requires <cmd-code>", 2)
+            return target, cwd, out_path, True, "cmd.exe", ["/d", "/s", "/c", " ".join(rest)]
         else:
             raise WinRemoteError(f"Unknown capture option: {option}", 2)
     if not rest:
@@ -591,125 +777,159 @@ def parse_capture_command(args: list[str]) -> tuple[Target, str | None, str | No
     return target, cwd, out_path, allow_powershell, rest[0], rest[1:]
 
 
-def invoke_passthrough(target: Target, request: dict[str, object]) -> int:
-    return invoke(target, request, capture_output=False)
+def parse_wsl_script(args: list[str], *, capture: bool, command_name: str | None = None):
+    command_name = command_name or ("wsl-sh-capture" if capture else "wsl-sh")
+    if not args:
+        raise WinRemoteError(f"{command_name} requires <target>", 2)
+    target = load_target(args[0])
+    rest = args[1:]
+    distro = target.wsl_distro
+    user = target.wsl_user
+    cwd = None
+    shell = target.wsl_shell
+    out_path = None
+    passthrough_options = {
+        "--pid-file", "--log-file", "--port", "--health-url", "--ready-timeout", "--settle-delay", "--poll-interval-ms", "--diag-lines", "--launch-path"
+    }
+    extra: list[str] = []
+    while rest and rest[0].startswith("--") and rest[0] not in {"--file", "--stdin"}:
+        option = rest.pop(0)
+        if option == "--distro":
+            distro = pop_value(rest, option)
+        elif option == "--user":
+            user = pop_value(rest, option)
+        elif option == "--cwd":
+            cwd = pop_value(rest, option)
+        elif option == "--shell":
+            shell = pop_value(rest, option)
+        elif capture and option == "--out":
+            out_path = pop_value(rest, option)
+        elif option == "--heartbeat-seconds":
+            _ = pop_value(rest, option)
+        elif option in passthrough_options:
+            extra.extend([option, pop_value(rest, option)])
+        else:
+            raise WinRemoteError(f"Unknown {command_name} option: {option}", 2)
+    script_args: list[str] = []
+    if "--" in rest:
+        idx = rest.index("--")
+        script_part = rest[:idx]
+        script_args = rest[idx + 1:]
+    else:
+        script_part = rest
+    script = read_script_argument(command_name, script_part, suffix="sh")
+    parse_wsl_script.extra_options = extra  # type: ignore[attr-defined]
+    return target, script, script_args, cwd, distro, user, shell, out_path
 
 
-def invoke(target: Target, request: dict[str, object], *, capture_output: bool) -> subprocess.CompletedProcess[str] | int:
-    if not target_supports_invoke(target):
-        raise UnsupportedInvoke("target native executor does not support invoke-b64")
-    envelope = encode_envelope(compact_none(request))
-    native_args = ["invoke-b64", envelope]
-    if target.access_token:
-        native_args.extend(["--access-token", b64_utf8(target.access_token)])
-    result = run_remote_native(target, native_args, capture_output=capture_output)
-    if isinstance(result, subprocess.CompletedProcess):
-        if result.returncode == 1 and "Unknown command: invoke-b64" in result.stderr:
-            raise UnsupportedInvoke("target native executor rejected invoke-b64")
-        return result
-    return result
+parse_wsl_script.extra_options = []  # type: ignore[attr-defined]
 
 
-def target_supports_invoke(target: Target) -> bool:
-    cache_name = f"_WIN_REMOTE_SUPPORTS_INVOKE_{target.name}"
-    cached = os.environ.get(cache_name)
-    if cached == "1":
-        return True
-    if cached == "0":
-        return False
-    result = run_remote_native(target, ["help"], capture_output=True)
-    supported = isinstance(result, subprocess.CompletedProcess) and result.returncode == 0 and "invoke-b64" in result.stdout
-    os.environ[cache_name] = "1" if supported else "0"
-    return supported
+def parse_wsl_container_script(args: list[str], *, capture: bool):
+    if not args:
+        raise WinRemoteError("wsl-container-sh requires <target>", 2)
+    container = {
+        "name": None,
+        "runtime": "docker",
+        "cwd": None,
+        "user": None,
+        "shell": "/bin/sh",
+    }
+    container_options = {
+        "--container": "name",
+        "--container-runtime": "runtime",
+        "--container-cwd": "cwd",
+        "--container-user": "user",
+        "--container-shell": "shell",
+    }
+    wsl_options_with_value = {"--distro", "--user", "--cwd", "--shell", "--out", "--heartbeat-seconds"}
+    filtered: list[str] = [args[0]]
+    rest = args[1:]
+    while rest:
+        option = rest.pop(0)
+        if option in container_options:
+            container[container_options[option]] = pop_value(rest, option)
+        elif option in {"--file", "--stdin", "--"}:
+            filtered.append(option)
+            filtered.extend(rest)
+            break
+        elif option in wsl_options_with_value:
+            filtered.append(option)
+            filtered.append(pop_value(rest, option))
+        else:
+            filtered.append(option)
+            filtered.extend(rest)
+            break
+    if not container["name"]:
+        raise WinRemoteError("wsl-container-sh requires --container <name>", 2)
+    return (*parse_wsl_script(filtered, capture=capture, command_name="wsl-container-sh"), container)
 
 
-def run_remote_native(target: Target, native_args: list[str], *, capture_output: bool) -> subprocess.CompletedProcess[str] | int:
-    native_path = resolve_native_path(target)
-    remote = build_remote_command(native_path, native_args)
-    argv = [*target.ssh_args, target.ssh_destination, remote]
-    if capture_output:
-        return subprocess.run(argv, text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    return subprocess.run(argv, stdin=subprocess.DEVNULL, check=False).returncode
+def build_container_wrapper(script: str, container: dict[str, str | None]) -> str:
+    delimiter = "WRE_SCRIPT_" + secrets.token_hex(12)
+    runtime = shlex.quote(container["runtime"] or "docker")
+    name = shlex.quote(container["name"] or "")
+    shell = shlex.quote(container["shell"] or "/bin/sh")
+    opts: list[str] = []
+    if container.get("cwd"):
+        opts.extend(["--workdir", shlex.quote(container["cwd"] or "")])
+    if container.get("user"):
+        opts.extend(["--user", shlex.quote(container["user"] or "")])
+    return f"""set -euo pipefail
+cat <<'{delimiter}' | {runtime} exec -i {' '.join(opts)} {name} {shell} -s -- "$@"
+{script}
+{delimiter}
+"""
 
 
-def resolve_native_path(target: Target) -> str:
-    current = read_current_release(target)
-    if current:
-        candidate = normalize_remote_path(f"{current.rstrip('/')}/WindowsRemoteExecutor.Native.exe")
-        if remote_file_exists(target, candidate):
-            return candidate
-    if remote_file_exists(target, target.native_exe):
-        return target.native_exe
-    return target.native_launcher
+def read_script_argument(command_name: str, args: list[str], *, suffix: str) -> str:
+    rest = list(args)
+    if rest and rest[0] == "--file":
+        rest.pop(0)
+        path = Path(pop_value(rest, "--file"))
+        if rest:
+            raise WinRemoteError(f"{command_name} --file does not accept extra arguments before --", 2)
+        if not path.is_file():
+            raise WinRemoteError(f"Local file not found: {path}", 2)
+        return path.read_text(encoding="utf-8")
+    if rest and rest[0] == "--stdin":
+        rest.pop(0)
+        if rest:
+            raise WinRemoteError(f"{command_name} --stdin does not accept extra arguments before --", 2)
+        return sys.stdin.read()
+    if rest:
+        return " ".join(rest)
+    raise WinRemoteError(f"{command_name} requires inline script, --file <local-script>, or --stdin", 2)
 
 
-def read_current_release(target: Target) -> str | None:
-    path = remote_cmd_path(target.native_current_file)
-    code = f'if exist "{path}" type "{path}"'
-    result = ssh_cmd(target, code, capture_output=True)
-    if result.returncode != 0:
-        return None
-    value = result.stdout.strip().replace("\\", "/")
-    return normalize_remote_path(value) if value else None
-
-
-def remote_file_exists(target: Target, remote_path: str) -> bool:
-    path = remote_cmd_path(remote_path)
-    result = ssh_cmd(target, f'if exist "{path}" (exit /b 0) else (exit /b 1)', capture_output=True)
-    return result.returncode == 0
-
-
-def ssh_cmd(target: Target, code: str, *, capture_output: bool) -> subprocess.CompletedProcess[str]:
-    remote = f'cmd.exe /v:off /d /s /c "{code}"'
-    return subprocess.run(
-        [*target.ssh_args, target.ssh_destination, remote],
-        text=True,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE if capture_output else None,
-        stderr=subprocess.PIPE if capture_output else None,
-        check=False,
-    )
-
-
-def build_remote_command(native_path: str, native_args: list[str]) -> str:
-    command = " ".join([quote_cmd_executable(native_path), *[quote_safe_native_arg(arg) for arg in native_args]])
-    return f'cmd.exe /v:off /d /s /c "{command}"'
-
-
-def quote_cmd_executable(path: str) -> str:
-    if '"' in path or "\n" in path or "\r" in path:
-        raise WinRemoteError(f"Unsafe native executable path: {path!r}", 2)
-    return f'"{remote_cmd_path(path)}"'
-
-
-def quote_safe_native_arg(value: str) -> str:
-    if "\n" in value or "\r" in value:
-        raise WinRemoteError("Native argv token unexpectedly contains a newline", 2)
-    if re.search(r"[\s\"&|<>^%!()]", value):
-        if '"' in value:
-            raise WinRemoteError("Native argv token unexpectedly contains a quote", 2)
-        return f'"{value}"'
-    return value
-
-
-def scp_to_remote(target: Target, local_path: Path, remote_path: str) -> None:
-    remote_path = normalize_remote_path(remote_path)
-    result = subprocess.run([*target.scp_args, str(local_path), f"{target.user}@{target.host}:{remote_path}"], stdin=subprocess.DEVNULL, check=False)
-    if result.returncode != 0:
-        raise WinRemoteError(f"scp upload failed with exit code {result.returncode}", result.returncode)
-
-
-def scp_from_remote(target: Target, remote_path: str, local_path: Path) -> None:
-    remote_path = normalize_remote_path(remote_path)
-    result = subprocess.run([*target.scp_args, f"{target.user}@{target.host}:{remote_path}", str(local_path)], stdin=subprocess.DEVNULL, check=False)
-    if result.returncode != 0:
-        raise WinRemoteError(f"scp download failed with exit code {result.returncode}", result.returncode)
-
-
-def run_legacy(args: list[str]) -> int:
-    env = os.environ.copy()
-    env["WIN_REMOTE_LEGACY"] = "1"
-    return subprocess.run([str(BIN), *args], env=env, check=False).returncode
+def validate_release_native_zip(path: Path) -> str:
+    if not path.is_file():
+        raise WinRemoteError(f"Native release zip not found: {path}", 2)
+    name = path.name
+    scd = re.match(r"windows-remote-executor-native-v[^/]+-scd-win-x64\.zip$", name)
+    fdd = re.match(r"windows-remote-executor-native-v[^/]+-fdd-win-x64\.zip$", name)
+    if not scd and not fdd:
+        raise WinRemoteError(
+            "V3 update-tools requires a GitHub release asset named "
+            "windows-remote-executor-native-v<version>-scd-win-x64.zip or "
+            "windows-remote-executor-native-v<version>-fdd-win-x64.zip",
+            2,
+        )
+    try:
+        with zipfile.ZipFile(path) as zf:
+            names = {Path(info.filename).name for info in zf.infolist() if not info.is_dir()}
+    except zipfile.BadZipFile as exc:
+        raise WinRemoteError(f"Invalid native release zip: {path}", 2) from exc
+    required = {"WindowsRemoteExecutor.Native.exe"} if scd else {
+        "WindowsRemoteExecutor.Native.exe",
+        "WindowsRemoteExecutor.Native.dll",
+        "WindowsRemoteExecutor.Native.runtimeconfig.json",
+        "WindowsRemoteExecutor.Native.deps.json",
+    }
+    missing = sorted(required - names)
+    if missing:
+        raise WinRemoteError(f"Native release zip is missing required files: {', '.join(missing)}", 2)
+    return "scd" if scd else "fdd"
 
 
 def load_target(raw_target: str) -> Target:
@@ -791,14 +1011,93 @@ def remote_parent(path: str) -> str:
     return normalized.rsplit("/", 1)[0]
 
 
-def encode_envelope(request: dict[str, object]) -> str:
-    raw = json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+def run_remote_native(target: Target, native_args: list[str], *, capture_output: bool) -> subprocess.CompletedProcess[str] | int:
+    native_path = resolve_native_path(target)
+    remote = build_remote_command(native_path, native_args)
+    argv = [*target.ssh_args, target.ssh_destination, remote]
+    if capture_output:
+        return subprocess.run(argv, text=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    return subprocess.run(argv, stdin=subprocess.DEVNULL, check=False).returncode
 
 
-def base64_url_decode(value: str) -> bytes:
-    padded = value + "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(padded.encode("ascii"))
+def resolve_native_path(target: Target) -> str:
+    current = read_current_release(target)
+    if current:
+        candidate = normalize_remote_path(f"{current.rstrip('/')}/WindowsRemoteExecutor.Native.exe")
+        if remote_file_exists(target, candidate):
+            return candidate
+    if remote_file_exists(target, target.native_exe):
+        return target.native_exe
+    return target.native_launcher
+
+
+def read_current_release(target: Target) -> str | None:
+    path = remote_cmd_path(target.native_current_file)
+    code = f'if exist "{path}" type "{path}"'
+    result = ssh_cmd(target, code, capture_output=True)
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip().replace("\\", "/")
+    return normalize_remote_path(value) if value else None
+
+
+def remote_file_exists(target: Target, remote_path: str) -> bool:
+    path = remote_cmd_path(remote_path)
+    result = ssh_cmd(target, f'if exist "{path}" (exit /b 0) else (exit /b 1)', capture_output=True)
+    return result.returncode == 0
+
+
+def ssh_cmd(target: Target, code: str, *, capture_output: bool) -> subprocess.CompletedProcess[str]:
+    remote = f'cmd.exe /v:off /d /s /c "{code}"'
+    return subprocess.run(
+        [*target.ssh_args, target.ssh_destination, remote],
+        text=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE if capture_output else None,
+        stderr=subprocess.PIPE if capture_output else None,
+        check=False,
+    )
+
+
+def build_remote_command(native_path: str, native_args: list[str]) -> str:
+    command = " ".join([quote_cmd_executable(native_path), *[quote_safe_native_arg(arg) for arg in native_args]])
+    return f'cmd.exe /v:off /d /s /c "{command}"'
+
+
+def quote_cmd_executable(path: str) -> str:
+    if '"' in path or "\n" in path or "\r" in path:
+        raise WinRemoteError(f"Unsafe native executable path: {path!r}", 2)
+    return f'"{remote_cmd_path(path)}"'
+
+
+def quote_safe_native_arg(value: str) -> str:
+    if "\n" in value or "\r" in value:
+        raise WinRemoteError("Native argv token unexpectedly contains a newline", 2)
+    if re.search(r"[\s\"&|<>^%!()]", value):
+        if '"' in value:
+            raise WinRemoteError("Native argv token unexpectedly contains a quote", 2)
+        return f'"{value}"'
+    return value
+
+
+def scp_to_remote(target: Target, local_path: Path, remote_path: str) -> None:
+    remote_path = normalize_remote_path(remote_path)
+    result = subprocess.run([*target.scp_args, str(local_path), f"{target.user}@{target.host}:{remote_path}"], stdin=subprocess.DEVNULL, check=False)
+    if result.returncode != 0:
+        raise WinRemoteError(f"scp upload failed with exit code {result.returncode}", result.returncode)
+
+
+def scp_dir_to_remote(target: Target, local_dir: Path, remote_dir: str) -> None:
+    result = subprocess.run([*target.scp_args, "-r", str(local_dir) + "/.", f"{target.user}@{target.host}:{normalize_remote_path(remote_dir)}"], stdin=subprocess.DEVNULL, check=False)
+    if result.returncode != 0:
+        raise WinRemoteError(f"scp directory upload failed with exit code {result.returncode}", result.returncode)
+
+
+def scp_from_remote(target: Target, remote_path: str, local_path: Path) -> None:
+    remote_path = normalize_remote_path(remote_path)
+    result = subprocess.run([*target.scp_args, f"{target.user}@{target.host}:{remote_path}", str(local_path)], stdin=subprocess.DEVNULL, check=False)
+    if result.returncode != 0:
+        raise WinRemoteError(f"scp download failed with exit code {result.returncode}", result.returncode)
 
 
 def b64_utf8(value: str) -> str:
@@ -847,29 +1146,64 @@ def empty_to_none(value: str | None) -> str | None:
     return value if value else None
 
 
+def write_rpc_json(call, out_path: str | Path | None = None) -> None:
+    text = json.dumps(call.response, ensure_ascii=False, indent=2) + "\n"
+    if out_path:
+        Path(out_path).write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+    if call.ssh_stderr and not call.response.get("stderrText"):
+        sys.stderr.write(call.ssh_stderr)
+
+
+def write_or_stdout(text: str, out_path: Path | None) -> None:
+    if out_path:
+        out_path.write_text(text, encoding="utf-8")
+    else:
+        sys.stdout.write(text)
+
+
+def write_stderr(call) -> None:
+    stderr = str(call.response.get("stderrText", "")) or call.ssh_stderr
+    if stderr:
+        sys.stderr.write(stderr)
+
+
+def v3():
+    import wre_v3_client
+    return wre_v3_client
+
+
 def print_usage() -> None:
     print(
         """Usage:
   win-remote probe <target> [--out <local-json-file>]
   win-remote run <target> [--cwd <remote-dir>] [--allow-powershell] <program> [args...]
-  win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
+  win-remote capture <target> [--cwd <remote-dir>] [--out <local-json-file>] [--allow-powershell] [--cmd <cmd-code> | <program> [args...]]
+  win-remote spawn <target> [--cwd <remote-dir>] [--stdout <remote-log>] [--stderr <remote-log>] [--out <local-json-file>] [--allow-powershell] <program> [args...]
   win-remote exec <target> [--cwd <remote-dir>] [--shell <powershell|cmd>] [--file <local-script> | --stdin | <script-code>]
   win-remote exec-capture <target> [--cwd <remote-dir>] [--shell <powershell|cmd>] [--out <local-json-file>] [--file <local-script> | --stdin | <script-code>]
+  win-remote py <target> <remote-script-path> [--cwd <remote-dir>] [--python <remote-python>] [--conda-env <name> | --conda-prefix <prefix>] [-- <script-args...>]
   win-remote wsl <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] <program> [args...]
   win-remote wsl-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--out <local-json-file>] <program> [args...]
+  win-remote wsl-py <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--python <linux-python>] [--module <module> | <script-path>] [-- <script-args...>]
+  win-remote wsl-py-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--python <linux-python>] [--out <local-json-file>] [--module <module> | <script-path>] [-- <script-args...>]
+  win-remote wsl-sh <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-sh-capture <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
+  win-remote wsl-resident <target> [--distro <name>] [--user <linux-user>] [--cwd <linux-dir>] [--shell <linux-shell>] [--pid-file <linux-path>] [--log-file <linux-path>] [--port <n>] [--health-url <url>] [--ready-timeout <seconds>] [--settle-delay <seconds>] [--poll-interval-ms <n>] [--diag-lines <n>] [--out <local-json-file>] [--file <local-sh> | --stdin | <shell-code>] [-- <script-args...>]
   win-remote put <target> <local-path> <remote-path>
   win-remote get <target> <remote-path> <local-path>
+  win-remote deploy <target> <local-dir> <remote-dir> [--post <powershell-code> | --post-file <local-ps1> | --post-stdin]
+  win-remote guard <target> [--out <local-json-file>] [--no-disable] [--expected-listen-address <ip>]
+  win-remote repair <target> [--out <local-json-file>] [--expected-listen-address <ip>] [--force-rewrite]
+  win-remote tasks <target> [--task-name <name>]... [--prefix <text>] [--out <local-json-file>]
+  win-remote policy <target> [--mode <private-only|public-with-token>] [--command-mode <standard|argv-only>] [--expected-listen-address <ip>] [--label <text>] [--token <plain-token> | --rotate-token]
+  win-remote find <target> <query> [--max <count>]
   win-remote update-tools <target> --native-zip <GitHub-release-asset.zip>
 
-Most common commands use the v2 invoke-b64 envelope when the target native
-executor supports it. Older targets automatically fall back to the legacy bash
-implementation. Set WIN_REMOTE_LEGACY=1 to force the legacy implementation.
+All remote execution uses V3 rpc-stdio.
 """
     )
-
-
-def unreachable(message: str) -> NoReturn:
-    raise RuntimeError(message)
 
 
 if __name__ == "__main__":

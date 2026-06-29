@@ -172,26 +172,15 @@ if ! grep -q 'blocks raw PowerShell transport by default' "${RAW_PS_LOG}"; then
   exit 1
 fi
 
-status_line "structured PowerShell exec path still works"
+status_line "V3 PowerShell script path still works"
 EXEC_LOG="${TMP_DIR}/exec.log"
 if [[ ${ARGV_ONLY} -eq 1 ]]; then
-  status_line "argv-only still allows staged exec bridge"
+  status_line "argv-only still allows V3 script actions for maintenance"
 fi
 "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_LOG}" <<'EOF'
 Write-Output 'structured-exec-ok'
 EOF
 grep -q 'structured-exec-ok' "${EXEC_LOG}"
-
-if [[ ${ARGV_ONLY} -eq 0 ]]; then
-  status_line "structured exec fallback for older native executor"
-  EXEC_FALLBACK_LOG="${TMP_DIR}/exec-fallback.log"
-  EXEC_FALLBACK_ERR="${TMP_DIR}/exec-fallback.err"
-  WIN_REMOTE_LEGACY=1 WIN_REMOTE_FORCE_EXEC_FALLBACK=1 "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_FALLBACK_LOG}" 2>"${EXEC_FALLBACK_ERR}" <<'EOF'
-Write-Output 'structured-exec-fallback-ok'
-EOF
-  grep -q 'structured-exec-fallback-ok' "${EXEC_FALLBACK_LOG}"
-  grep -q 'using run-b64 to run the staged powershell payload' "${EXEC_FALLBACK_ERR}"
-fi
 
 status_line "put/get remote path and filename containing spaces"
 LOCAL_PAYLOAD="${TMP_DIR}/payload with spaces.txt"

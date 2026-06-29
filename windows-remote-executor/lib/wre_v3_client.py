@@ -74,6 +74,78 @@ def host_probe(target: cli.Target) -> RpcCall:
     return call_rpc(target, "host.probe")
 
 
+def host_guard(
+    target: cli.Target,
+    *,
+    expected_listen_address: str | None = None,
+    log_path: str | None = None,
+    no_disable: bool = False,
+) -> RpcCall:
+    return call_rpc(target, "host.guard", {
+        "expectedListenAddress": expected_listen_address,
+        "logPath": cli.normalize_remote_path(log_path) if log_path else None,
+        "noDisable": no_disable,
+    })
+
+
+def host_repair(
+    target: cli.Target,
+    *,
+    expected_listen_address: str | None = None,
+    codex_root: str | None = None,
+    log_path: str | None = None,
+    force_rewrite: bool = False,
+) -> RpcCall:
+    return call_rpc(target, "host.repair", {
+        "expectedListenAddress": expected_listen_address,
+        "codexRoot": cli.normalize_remote_path(codex_root) if codex_root else None,
+        "logPath": cli.normalize_remote_path(log_path) if log_path else None,
+        "forceRewrite": force_rewrite,
+    })
+
+
+def host_tasks(target: cli.Target, *, task_names: list[str] | None = None, prefix: str | None = None) -> RpcCall:
+    return call_rpc(target, "host.tasks", {"taskNames": task_names or [], "prefix": prefix})
+
+
+def host_policy(
+    target: cli.Target,
+    *,
+    exposure_mode: str = "private-only",
+    command_mode: str = "standard",
+    expected_listen_address: str | None = None,
+    label: str | None = None,
+    token: str | None = None,
+) -> RpcCall:
+    return call_rpc(target, "host.policy", {
+        "exposureMode": exposure_mode,
+        "commandMode": command_mode,
+        "expectedListenAddress": expected_listen_address,
+        "label": label,
+        "token": token,
+    })
+
+
+def process_run(
+    target: cli.Target,
+    file: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    timeout_seconds: int | None = None,
+    capture_limit_bytes: int | None = None,
+    allow_powershell: bool = False,
+) -> RpcCall:
+    cli.guard_raw_powershell("run", allow_powershell, file)
+    return call_rpc(
+        target,
+        "process.run",
+        process_payload(file, args, cwd=cwd),
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
+    )
+
+
 def process_capture(
     target: cli.Target,
     file: str,
@@ -85,15 +157,43 @@ def process_capture(
     allow_powershell: bool = False,
 ) -> RpcCall:
     cli.guard_raw_powershell("capture", allow_powershell, file)
-    payload = {
-        "file": cli.normalize_remote_path(file),
-        "cwd": cli.normalize_remote_path(cwd) if cwd else None,
-        "args": args or [],
-    }
     return call_rpc(
         target,
         "process.capture",
-        payload,
+        process_payload(file, args, cwd=cwd),
+        timeout_seconds=timeout_seconds,
+        capture_limit_bytes=capture_limit_bytes,
+    )
+
+
+def process_spawn(
+    target: cli.Target,
+    file: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    stdout: str | None = None,
+    stderr: str | None = None,
+    allow_powershell: bool = False,
+) -> RpcCall:
+    cli.guard_raw_powershell("spawn", allow_powershell, file)
+    return call_rpc(target, "process.spawn", process_payload(file, args, cwd=cwd, stdout=stdout, stderr=stderr))
+
+
+def script_run(
+    target: cli.Target,
+    script: str,
+    *,
+    kind: str = "powershell",
+    cwd: str | None = None,
+    exe: str | None = None,
+    timeout_seconds: int | None = None,
+    capture_limit_bytes: int | None = None,
+) -> RpcCall:
+    return call_rpc(
+        target,
+        "script.run",
+        script_payload(script, kind=kind, cwd=cwd, exe=exe),
         timeout_seconds=timeout_seconds,
         capture_limit_bytes=capture_limit_bytes,
     )
@@ -109,19 +209,123 @@ def script_capture(
     timeout_seconds: int | None = None,
     capture_limit_bytes: int | None = None,
 ) -> RpcCall:
-    payload = {
-        "kind": kind,
-        "script": script,
-        "cwd": cli.normalize_remote_path(cwd) if cwd else None,
-        "exe": cli.normalize_remote_path(exe) if exe else None,
-    }
     return call_rpc(
         target,
         "script.capture",
-        payload,
+        script_payload(script, kind=kind, cwd=cwd, exe=exe),
         timeout_seconds=timeout_seconds,
         capture_limit_bytes=capture_limit_bytes,
     )
+
+
+def python_run(
+    target: cli.Target,
+    script_path: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    python: str | None = None,
+    conda_env: str | None = None,
+    conda_prefix: str | None = None,
+) -> RpcCall:
+    return call_rpc(target, "python.run", {
+        "scriptPath": cli.normalize_remote_path(script_path),
+        "cwd": cli.normalize_remote_path(cwd) if cwd else None,
+        "python": cli.normalize_remote_path(python) if python else None,
+        "condaEnv": conda_env,
+        "condaPrefix": cli.normalize_remote_path(conda_prefix) if conda_prefix else None,
+        "args": args or [],
+    })
+
+
+def wsl_run(
+    target: cli.Target,
+    file: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    distribution: str | None = None,
+    user: str | None = None,
+) -> RpcCall:
+    return call_rpc(target, "wsl.run", wsl_process_payload(file, args, cwd=cwd, distribution=distribution, user=user))
+
+
+def wsl_capture(
+    target: cli.Target,
+    file: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    distribution: str | None = None,
+    user: str | None = None,
+) -> RpcCall:
+    return call_rpc(target, "wsl.capture", wsl_process_payload(file, args, cwd=cwd, distribution=distribution, user=user))
+
+
+def wsl_script(
+    target: cli.Target,
+    script: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    distribution: str | None = None,
+    user: str | None = None,
+    shell: str | None = None,
+) -> RpcCall:
+    return call_rpc(target, "wsl.script", wsl_script_payload(script, args, cwd=cwd, distribution=distribution, user=user, shell=shell))
+
+
+def wsl_script_capture(
+    target: cli.Target,
+    script: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    distribution: str | None = None,
+    user: str | None = None,
+    shell: str | None = None,
+) -> RpcCall:
+    return call_rpc(target, "wsl.script.capture", wsl_script_payload(script, args, cwd=cwd, distribution=distribution, user=user, shell=shell))
+
+
+def wsl_resident(
+    target: cli.Target,
+    script: str,
+    args: list[str] | None = None,
+    *,
+    cwd: str | None = None,
+    distribution: str | None = None,
+    user: str | None = None,
+    shell: str | None = None,
+    launch_path: str | None = None,
+    pid_file: str | None = None,
+    log_file: str | None = None,
+    port: int | None = None,
+    health_url: str | None = None,
+    ready_timeout_seconds: int | None = None,
+    settle_delay_seconds: int | None = None,
+    poll_interval_ms: int | None = None,
+    diagnostic_lines: int | None = None,
+) -> RpcCall:
+    stage_path = f"/tmp/windows-remote-executor-resident-src-{uuid.uuid4().hex}.sh"
+    return call_rpc(target, "wsl.resident", {
+        "stagePath": stage_path,
+        "launchPath": launch_path,
+        "cwd": cwd,
+        "distribution": distribution,
+        "user": user,
+        "shell": shell,
+        "pidFile": pid_file,
+        "logFile": log_file,
+        "port": port,
+        "healthUrl": health_url,
+        "readyTimeoutSeconds": ready_timeout_seconds,
+        "settleDelaySeconds": settle_delay_seconds,
+        "pollIntervalMilliseconds": poll_interval_ms,
+        "diagnosticLines": diagnostic_lines,
+        "args": args or [],
+        "script": script,
+    })
 
 
 def file_write_text(target: cli.Target, path: str, text: str) -> RpcCall:
@@ -130,6 +334,87 @@ def file_write_text(target: cli.Target, path: str, text: str) -> RpcCall:
 
 def file_read_text(target: cli.Target, path: str, *, max_bytes: int | None = None) -> RpcCall:
     return call_rpc(target, "file.readText", {"path": cli.normalize_remote_path(path), "maxBytes": max_bytes})
+
+
+def file_mkdir(target: cli.Target, path: str) -> RpcCall:
+    return call_rpc(target, "file.mkdir", {"path": cli.normalize_remote_path(path)})
+
+
+def file_delete_tree(target: cli.Target, path: str) -> RpcCall:
+    return call_rpc(target, "file.deleteTree", {"path": cli.normalize_remote_path(path)})
+
+
+def file_copy(target: cli.Target, source: str, destination: str) -> RpcCall:
+    return call_rpc(target, "file.copy", {
+        "source": cli.normalize_remote_path(source),
+        "destination": cli.normalize_remote_path(destination),
+    })
+
+
+def everything_search(target: cli.Target, query: str, *, max_results: int | None = None) -> RpcCall:
+    return call_rpc(target, "everything.search", {"query": query, "max": max_results})
+
+
+def process_payload(
+    file: str,
+    args: list[str] | None,
+    *,
+    cwd: str | None = None,
+    stdout: str | None = None,
+    stderr: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "file": cli.normalize_remote_path(file),
+        "cwd": cli.normalize_remote_path(cwd) if cwd else None,
+        "stdout": cli.normalize_remote_path(stdout) if stdout else None,
+        "stderr": cli.normalize_remote_path(stderr) if stderr else None,
+        "args": args or [],
+    }
+
+
+def script_payload(script: str, *, kind: str, cwd: str | None = None, exe: str | None = None) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "script": script,
+        "cwd": cli.normalize_remote_path(cwd) if cwd else None,
+        "exe": cli.normalize_remote_path(exe) if exe else None,
+    }
+
+
+def wsl_process_payload(
+    file: str,
+    args: list[str] | None,
+    *,
+    cwd: str | None,
+    distribution: str | None,
+    user: str | None,
+) -> dict[str, Any]:
+    return {
+        "file": file,
+        "cwd": cwd,
+        "distribution": distribution,
+        "user": user,
+        "args": args or [],
+    }
+
+
+def wsl_script_payload(
+    script: str,
+    args: list[str] | None,
+    *,
+    cwd: str | None,
+    distribution: str | None,
+    user: str | None,
+    shell: str | None,
+) -> dict[str, Any]:
+    return {
+        "script": script,
+        "cwd": cwd,
+        "distribution": distribution,
+        "user": user,
+        "shell": shell,
+        "args": args or [],
+    }
 
 
 def build_rpc_request(

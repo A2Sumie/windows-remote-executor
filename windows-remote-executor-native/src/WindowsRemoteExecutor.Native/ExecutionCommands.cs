@@ -561,6 +561,122 @@ internal sealed class WslResidentOptions
 
 internal static class ExecutionCommands
 {
+    public static async Task<ProcessResult> CaptureProcessResultAsync(RunProcessOptions options)
+    {
+        return await ProcessRunner.RunCaptureAsync(
+            options.FilePath,
+            options.Arguments,
+            options.WorkingDirectory,
+            OutputEncodingPreference.Auto);
+    }
+
+    public static SpawnProcessResult SpawnProcess(SpawnProcessOptions options) =>
+        WindowsProcessSpawner.Spawn(options);
+
+    public static async Task<ProcessResult> CapturePythonResultAsync(PythonScriptOptions options)
+    {
+        var plan = ResolvePythonExecution(options);
+        return await ProcessRunner.RunCaptureAsync(
+            plan.FilePath,
+            plan.Arguments,
+            plan.WorkingDirectory,
+            OutputEncodingPreference.Utf8,
+            new Dictionary<string, string?>
+            {
+                ["PYTHONUTF8"] = "1",
+                ["PYTHONIOENCODING"] = "utf-8"
+            });
+    }
+
+    public static async Task<ProcessResult> CaptureWslProcessResultAsync(WslProcessOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var arguments = BuildWslArguments(
+            options.WorkingDirectory,
+            options.Distribution,
+            options.User,
+            options.FilePath,
+            options.Arguments);
+        return await ProcessRunner.RunCaptureAsync(
+            executable,
+            arguments,
+            workingDirectory: null,
+            OutputEncodingPreference.Utf8);
+    }
+
+    public static async Task<ProcessResult> CaptureWslScriptResultForRpcAsync(WslScriptOptions options) =>
+        await CaptureWslScriptResultAsync(options);
+
+    public static async Task<ProcessResult> CaptureWslResidentScriptForRpcAsync(string scriptBody, WslResidentOptions options)
+    {
+        var sourceWindowsPath = WriteTemporaryWslScript(scriptBody);
+        try
+        {
+            return await CaptureWslResidentResultForRpcAsync(new WslResidentOptions
+            {
+                StagePath = TranslateWindowsPathToWsl(sourceWindowsPath),
+                LaunchPath = options.LaunchPath,
+                WorkingDirectory = options.WorkingDirectory,
+                Distribution = options.Distribution,
+                User = options.User,
+                ShellPath = options.ShellPath,
+                PidFile = options.PidFile,
+                LogFile = options.LogFile,
+                Port = options.Port,
+                HealthUrl = options.HealthUrl,
+                ReadyTimeoutSeconds = options.ReadyTimeoutSeconds,
+                SettleDelaySeconds = options.SettleDelaySeconds,
+                PollIntervalMilliseconds = options.PollIntervalMilliseconds,
+                DiagnosticLines = options.DiagnosticLines,
+                ScriptArguments = options.ScriptArguments
+            });
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(sourceWindowsPath);
+        }
+    }
+
+    public static async Task<ProcessResult> CaptureWslResidentResultForRpcAsync(WslResidentOptions options)
+    {
+        var executable = ResolveWslExecutable();
+        var bootstrapScriptWindowsPath = WriteTemporaryWslScript(BuildWslResidentBootstrapScript());
+        var bootstrapScriptWslPath = TranslateWindowsPathToWsl(bootstrapScriptWindowsPath);
+        var launchPath = string.IsNullOrWhiteSpace(options.LaunchPath)
+            ? $"/tmp/windows-remote-executor-resident-{Guid.NewGuid():N}.sh"
+            : options.LaunchPath!;
+        var pidFile = string.IsNullOrWhiteSpace(options.PidFile)
+            ? $"/tmp/windows-remote-executor-resident-{Guid.NewGuid():N}.pid"
+            : options.PidFile!;
+        var logFile = string.IsNullOrWhiteSpace(options.LogFile)
+            ? $"/tmp/windows-remote-executor-resident-{Guid.NewGuid():N}.log"
+            : options.LogFile!;
+
+        try
+        {
+            var arguments = BuildWslArguments(
+                options.WorkingDirectory,
+                options.Distribution,
+                options.User,
+                "/bin/bash",
+                BuildWslResidentArguments(
+                    bootstrapScriptWslPath,
+                    options,
+                    launchPath,
+                    pidFile,
+                    logFile));
+            return await ProcessRunner.RunCaptureAsync(
+                executable,
+                arguments,
+                workingDirectory: null,
+                OutputEncodingPreference.Utf8);
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(bootstrapScriptWindowsPath);
+        }
+    }
+
     public static async Task<int> RunCommandAsync(string[] args)
     {
         var options = RunProcessOptions.FromBase64Args(args);
@@ -574,32 +690,15 @@ internal static class ExecutionCommands
     public static async Task<int> CaptureCommandAsync(string[] args)
     {
         var options = RunProcessOptions.FromBase64Args(args);
-        var result = await ProcessRunner.RunCaptureAsync(
-            options.FilePath,
-            options.Arguments,
-            options.WorkingDirectory,
-            OutputEncodingPreference.Auto);
-
-        var payload = new
-        {
-            exitCode = result.ExitCode,
-            stdoutText = result.StdOut,
-            stderrText = result.StdErr,
-            stdoutEncoding = result.StdOutEncoding,
-            stderrEncoding = result.StdErrEncoding,
-            stdoutBase64 = Convert.ToBase64String(result.StdOutBytes),
-            stderrBase64 = Convert.ToBase64String(result.StdErrBytes),
-            stdoutBytes = result.StdOutBytes.Length,
-            stderrBytes = result.StdErrBytes.Length
-        };
-        Console.WriteLine(JsonSerializer.Serialize(payload));
+        var result = await CaptureProcessResultAsync(options);
+        WriteCapturePayload(result);
         return result.ExitCode;
     }
 
     public static int SpawnCommand(string[] args)
     {
         var options = SpawnProcessOptions.FromBase64Args(args);
-        var result = WindowsProcessSpawner.Spawn(options);
+        var result = SpawnProcess(options);
         Console.WriteLine(JsonSerializer.Serialize(result));
         return 0;
     }

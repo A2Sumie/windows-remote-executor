@@ -1,6 +1,6 @@
 # Agent Guide
 
-Use this repository to operate Windows hosts from macOS or Linux through structured executor routes.
+Use this repository to operate Windows hosts from macOS or Linux through structured V3 executor routes.
 
 ## Source Of Truth
 
@@ -9,7 +9,7 @@ Use this repository to operate Windows hosts from macOS or Linux through structu
 - Native executor: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
 - Parent-workspace `windows-remote-executor/` and `windows-remote-executor-native/` paths may be symlinks into this repo. Keep this repo as the source tree.
 - From the parent livestr workspace, run Git commands with `git -C windows-remote-executor-public ...` or an explicit owning repo path.
-- Deploy executor updates only from GitHub release assets after a tag/release. Local publish output is for build verification, not production deployment.
+- Deploy executor updates only from GitHub release assets after a tag/release. Local publish output is for build verification and immediate handoff packages, not production host update proof.
 
 ## First Steps
 
@@ -21,32 +21,30 @@ Use this repository to operate Windows hosts from macOS or Linux through structu
 
 ## Route Choice
 
-- MCP tools call the wrapper; use them for routine agent work: `win_probe`, `win_run`, `win_capture`, `win_wsl*`, `win_exec*`, `win_tasks`, `win_put`, `win_get`, `win_guard`, and `win_repair`.
+- MCP tools call the Python V3 client directly; use them for routine agent work: `win_probe`, `win_run`, `win_capture`, `win_wsl*`, `win_exec*`, `win_tasks`, `win_put`, `win_get`, `win_guard`, and `win_repair`.
+- The only remote-control transport is native V3 `rpc-stdio`: fixed remote command `WindowsRemoteExecutor.Native.exe rpc-stdio`, one UTF-8 JSON request line on stdin, one UTF-8 JSON response line on stdout.
 - `run`, `capture`, and `spawn` are native argv routes. Use them for concrete Windows executables such as `whoami.exe`, `tasklist.exe`, `reg.exe`, `curl.exe`, `dism.exe`, `dotnet`, `git`, and app binaries.
 - `capture` returns structured output and raw bytes; use it when process output may be localized, UTF-16, codepage-shaped, or byte-sensitive.
-- `exec` and `exec-capture` stage PowerShell or cmd payloads through the native `exec-file-b64` bridge. Use `--file` or `--stdin` for Windows state or maintenance scripts.
+- `exec` and `exec-capture` send PowerShell or cmd script bodies through V3 `script.run` / `script.capture`. Use `--file` or `--stdin` for Windows state or maintenance scripts.
 - `exec --shell cmd` and compatibility `cmd` are for cmd-shaped scripts.
-- The wrapper is a Python shim around a v2 `invoke-b64` JSON envelope. If an older target lacks `invoke-b64`, it falls back to `win-remote-legacy` so existing hosts keep working until they are updated from a release asset.
-- The legacy wrapper checks target native help before using staged exec and staged file copy. If an older target lacks `exec-file-b64`, `exec-file-capture-b64`, or `copy-file-b64`, it runs the same staged file through structured `run-b64` or `capture-b64` and prints a compatibility warning on stderr.
-- If an older target lacks `spawn-b64`, the wrapper fails before launch with an update/fallback instruction instead of surfacing native `Unknown command`.
 - `py` is for Python scripts on the Windows host.
-- `wsl` and `wsl-capture` call `wsl.exe --exec <program> <args>`.
+- `wsl` and `wsl-capture` call V3 `wsl.run` / `wsl.capture`.
 - `wsl-py` and `wsl-py-capture` run WSL Python through explicit interpreter, cwd, module/script, and args.
-- `wsl-sh` and `wsl-sh-capture` upload a script to the Windows stage, translate the path into WSL, and bootstrap it into `/tmp/windows-remote-executor-*.sh` before execution.
-- `wsl-resident` stages a WSL script and returns readiness diagnostics for durable services.
-- `put`, `get`, and `deploy` move files. Silent successful admin routes return `OK`.
+- `wsl-sh` and `wsl-sh-capture` send script bodies through V3 `wsl.script` / `wsl.script.capture` so the script body stays out of SSH argv.
+- `wsl-resident` launches a WSL script and returns readiness diagnostics for durable services.
+- `put`, `get`, and `deploy` move bytes with `scp`; V3 RPC handles the control-plane setup such as directory creation and post scripts.
 - `policy`, `guard`, and `repair` manage access policy and `sshd` safety.
 - `tasks` or MCP `win_tasks` inspect scheduled tasks.
 - `update-tools --native-zip <release-asset.zip>` deploys a release asset and flips `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`.
 
 ## Route And Policy Boundary
 
-- Prefer the route with the lowest expected error rate for the concrete task. In normal agent work, that is MCP, structured argv, staged payload files, `capture`, or staged `exec`.
+- Prefer the route with the lowest expected error rate for the concrete task. In normal agent work, that is MCP, structured argv, `capture`, or V3 script actions.
 - The wrapper has a default guard for `powershell.exe` and `pwsh` through `run`, `capture`, and `spawn`; `--allow-powershell` and `WIN_REMOTE_ALLOW_RAW_POWERSHELL=1` are explicit escape hatches when that route is lower-risk.
 - On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
-- `argv-only` still allows staged `exec-file-b64` and `exec-file-capture-b64`. Use that bridge when script-shaped maintenance is the lower-error route under this policy.
+- `argv-only` still allows V3 script actions for staged maintenance. Use that bridge when script-shaped maintenance is the lower-error route under this policy.
 - Record the actual route choice and verification evidence instead of reducing the policy to a blanket PowerShell claim.
-- If existing routes cannot represent a workflow without fragile quoting, add an `invoke-b64` action plus MCP/tool support before adding another quoting convention.
+- If existing routes cannot represent a workflow without fragile quoting, add a V3 RPC action plus MCP/tool support before adding another quoting convention.
 - Use forward slashes for Windows paths, for example `D:/StreamServ/auto_stream.py`, or quote backslash paths. The wrapper rejects drive-relative shapes such as `D:StreamServauto_stream.py` because they usually mean the local shell stripped backslashes.
 
 ## WSL Boundary
@@ -79,7 +77,7 @@ Use the checks that match the change:
 3. `win-remote guard <target>` if networking or policy changed
 4. one `exec --file` or `exec --stdin` path if staged Windows script behavior changed
 5. one `wsl-capture`, `wsl-sh-capture`, or `wsl-resident` proof if WSL behavior changed
-6. Python CLI tests and native build/selftest before release deployment; `scripts/verify-remote-cases.sh <target>` when the target is available
+6. Python CLI tests and native build/selftest before release deployment; `scripts/verify-v3-remote-cases.sh <target>` when the target is available
 
 ## Minimal Workflow
 
@@ -88,7 +86,7 @@ Use the checks that match the change:
 ./windows-remote-executor/bin/win-remote run <target> whoami.exe
 ./windows-remote-executor/bin/win-remote put <target> ./local.file C:/CodexRemote/inbox/local.file
 ./windows-remote-executor/bin/win-remote deploy <target> ./dist C:/CodexRemote/apps/myapp
-./windows-remote-executor/bin/win-remote update-tools --native-zip <release-asset.zip>
+./windows-remote-executor/bin/win-remote update-tools <target> --native-zip <release-asset.zip>
 ```
 
 ## More Templates

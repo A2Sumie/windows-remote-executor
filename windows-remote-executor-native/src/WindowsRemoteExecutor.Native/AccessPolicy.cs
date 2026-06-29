@@ -120,7 +120,7 @@ internal static class ExecutorAccessControl
 
         if (!policy.MatchesToken(accessToken))
         {
-            throw new UnauthorizedAccessException($"Access token required for command '{command}'.");
+            throw new UnauthorizedAccessException($"Access token required for {CommandDisplayName(command)}.");
         }
     }
 
@@ -129,7 +129,6 @@ internal static class ExecutorAccessControl
         return command switch
         {
             "probe" => true,
-            "invoke-b64" => true,
             "run-b64" => true,
             "capture-b64" => true,
             "spawn-b64" => true,
@@ -184,7 +183,7 @@ internal static class ExecutorAccessControl
             case "wsl-script-capture-b64":
             case "wsl-resident-b64":
                 throw new UnauthorizedAccessException(
-                    $"Command '{command}' is blocked by access-policy commandMode=argv-only. Use run-b64/capture-b64 with an allowed executable and explicit argv, or exec-file-b64 for staged script maintenance.");
+                    $"{CommandDisplayName(command)} is blocked by access-policy commandMode=argv-only. Use process.run/process.capture with an allowed executable and explicit argv, or script.run/script.capture for staged script maintenance.");
 
             default:
                 return;
@@ -208,8 +207,35 @@ internal static class ExecutorAccessControl
         if (IsBlockedInterpreterOrShell(executableName))
         {
             throw new UnauthorizedAccessException(
-                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for '{command}'. Shell, PowerShell, Python, and WSL interpreters are not allowed through run/capture/spawn.");
+                $"Program '{filePath}' is blocked by access-policy commandMode=argv-only for {CommandDisplayName(command)}. Shell, PowerShell, Python, and WSL interpreters are not allowed through process.run/process.capture/process.spawn.");
         }
+    }
+
+    private static string CommandDisplayName(string command)
+    {
+        return command switch
+        {
+            "probe" => "host probe actions",
+            "guard-sshd" => "host.guard",
+            "repair-sshd" => "host.repair",
+            "run-b64" => "process.run",
+            "capture-b64" => "process.capture",
+            "spawn-b64" => "process.spawn",
+            "mkdir-b64" => "file.mkdir",
+            "delete-tree-b64" => "file.deleteTree",
+            "copy-file-b64" => "file read/write/copy actions",
+            "python-b64" => "python.run",
+            "powershell-b64" => "script actions",
+            "exec-file-b64" => "script.run",
+            "exec-file-capture-b64" => "script.capture",
+            "wsl-b64" => "wsl.run",
+            "wsl-capture-b64" => "wsl.capture",
+            "wsl-script-b64" => "wsl.script",
+            "wsl-script-capture-b64" => "wsl.script.capture",
+            "wsl-resident-b64" => "wsl.resident",
+            "everything-b64" => "everything.search",
+            _ => command
+        };
     }
 
     private static string? TryReadBase64Option(string[] args, string option)

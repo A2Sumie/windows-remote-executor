@@ -362,20 +362,20 @@ function Ensure-SshRepairTasks {
     & schtasks.exe /Run /TN 'CodexRemote Sshd Repair Watch' *> $null
 }
 
-function Remove-LegacyStartupConsoleArtifacts {
+function Remove-OldStartupConsoleArtifacts {
     param(
         [string]$Root,
         [string]$UserName
     )
 
     $startupDir = Join-Path (Resolve-UserProfilePath -UserName $UserName) 'AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup'
-    $legacyStartupPath = Join-Path $startupDir 'CodexRemote Console.cmd'
+    $oldStartupPath = Join-Path $startupDir 'CodexRemote Console.cmd'
 
     foreach ($path in @(
             (Join-Path (Join-Path $Root 'tools') 'codex-startup-console.cmd'),
             (Join-Path (Join-Path $Root 'tools') 'CodexRemote Console.cmd'),
             (Join-Path (Join-Path $Root 'tools') 'codex-repair-sshd.cmd'),
-            $legacyStartupPath
+            $oldStartupPath
         )) {
         if (Test-Path -LiteralPath $path) {
             Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
@@ -397,7 +397,7 @@ function Ensure-StartupRepair {
     $repairLogPath = Join-Path (Join-Path $Root 'logs') 'sshd-repair.log'
     $taskCommand = Get-SshRepairTaskCommand -Root $Root -ListenAddress $ListenAddress
 
-    Remove-LegacyStartupConsoleArtifacts -Root $Root -UserName $UserName
+    Remove-OldStartupConsoleArtifacts -Root $Root -UserName $UserName
     Ensure-SessionRepairTask -TaskName $taskName -UserName $UserName -TaskCommand $taskCommand
     Ensure-SshRepairTasks -TaskCommand $taskCommand
 

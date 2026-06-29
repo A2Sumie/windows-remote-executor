@@ -29,13 +29,7 @@ internal static class Program
             var securityContext = ExecutorAccessControl.Extract(args.Skip(1).ToArray());
             var commandArgs = securityContext.RemainingArgs;
 
-            if (command == "selftest")
-            {
-                Console.WriteLine(InvokeRequestDispatcher.BuildSelfTestJson());
-                return 0;
-            }
-
-            if (command == "rpc-selftest")
+            if (command is "selftest" or "rpc-selftest")
             {
                 Console.WriteLine(RpcServer.BuildSelfTestJson());
                 return 0;
@@ -53,7 +47,6 @@ internal static class Program
                     return await RpcServer.RunStdioAsync();
 
                 case "bootstrap":
-                case "bootstrap-x570":
                     var bootstrapOptions = BootstrapOptions.FromArgs(commandArgs);
                     var bootstrapResult = await Bootstrapper.RunBootstrapAsync(bootstrapOptions);
                     Console.WriteLine(JsonSerializer.Serialize(bootstrapResult, JsonOptions));
@@ -64,83 +57,6 @@ internal static class Program
 
                 case "repair-sshd":
                     return await SshRepair.RunCommandAsync(commandArgs);
-
-                case "probe":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    var probe = ProbeCollector.Collect();
-                    Console.WriteLine(JsonSerializer.Serialize(probe, JsonOptions));
-                    return 0;
-
-                case "invoke-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await InvokeRequestDispatcher.RunAsync(commandArgs, securityContext.AccessToken);
-
-                case "run-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunCommandAsync(commandArgs);
-
-                case "capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.CaptureCommandAsync(commandArgs);
-
-                case "spawn-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return ExecutionCommands.SpawnCommand(commandArgs);
-
-                case "spawn-direct-b64":
-                    return ExecutionCommands.SpawnDirectCommand(commandArgs);
-
-                case "mkdir-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return FileCommands.EnsureDirectory(commandArgs);
-
-                case "delete-tree-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return FileCommands.DeleteTree(commandArgs);
-
-                case "copy-file-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return FileCommands.CopyFile(commandArgs);
-
-                case "python-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunPythonAsync(commandArgs);
-
-                case "powershell-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunPowerShellAsync(commandArgs);
-
-                case "exec-file-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunExecFileAsync(commandArgs);
-
-                case "exec-file-capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.CaptureExecFileAsync(commandArgs);
-
-                case "wsl-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunWslAsync(commandArgs);
-
-                case "wsl-capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.CaptureWslAsync(commandArgs);
-
-                case "wsl-script-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunWslScriptAsync(commandArgs);
-
-                case "wsl-script-capture-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.CaptureWslScriptAsync(commandArgs);
-
-                case "wsl-resident-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return await ExecutionCommands.RunWslResidentAsync(commandArgs);
-
-                case "everything-b64":
-                    ExecutorAccessControl.EnsureCommandAllowed(command, securityContext.AccessToken, commandArgs);
-                    return EverythingSearch.SearchToStdout(commandArgs);
 
                 default:
                     Console.Error.WriteLine($"Unknown command: {args[0]}");
@@ -172,30 +88,11 @@ internal static class Program
 
             Usage:
               WindowsRemoteExecutor.Native.exe bootstrap [options]
-              WindowsRemoteExecutor.Native.exe bootstrap-x570 [options]   (legacy alias)
               WindowsRemoteExecutor.Native.exe guard-sshd [options]
               WindowsRemoteExecutor.Native.exe repair-sshd [options]
-              WindowsRemoteExecutor.Native.exe probe
               WindowsRemoteExecutor.Native.exe selftest
               WindowsRemoteExecutor.Native.exe rpc-selftest
               WindowsRemoteExecutor.Native.exe rpc-stdio
-              WindowsRemoteExecutor.Native.exe invoke-b64 <base64url-json-envelope>
-              WindowsRemoteExecutor.Native.exe run-b64 [options]
-              WindowsRemoteExecutor.Native.exe capture-b64 [options]
-              WindowsRemoteExecutor.Native.exe spawn-b64 [options]
-              WindowsRemoteExecutor.Native.exe mkdir-b64 [options]
-              WindowsRemoteExecutor.Native.exe delete-tree-b64 [options]
-              WindowsRemoteExecutor.Native.exe copy-file-b64 [options]
-              WindowsRemoteExecutor.Native.exe python-b64 [options]
-              WindowsRemoteExecutor.Native.exe powershell-b64 [options]
-              WindowsRemoteExecutor.Native.exe exec-file-b64 [options]
-              WindowsRemoteExecutor.Native.exe exec-file-capture-b64 [options]
-              WindowsRemoteExecutor.Native.exe wsl-b64 [options]
-              WindowsRemoteExecutor.Native.exe wsl-capture-b64 [options]
-              WindowsRemoteExecutor.Native.exe wsl-script-b64 [options]
-              WindowsRemoteExecutor.Native.exe wsl-script-capture-b64 [options]
-              WindowsRemoteExecutor.Native.exe wsl-resident-b64 [options]
-              WindowsRemoteExecutor.Native.exe everything-b64 [options]
 
             bootstrap options:
               --authorized-key <public-key>
@@ -218,112 +115,9 @@ internal static class Program
               --log-path <path>
               --force-rewrite
 
-            run-b64 options:
-              --file <base64-utf8-path-or-command>
-              --cwd <base64-utf8-working-directory>
-              --arg <base64-utf8-argument>
-
-            capture-b64 options:
-              --file <base64-utf8-path-or-command>
-              --cwd <base64-utf8-working-directory>
-              --arg <base64-utf8-argument>
-
-            spawn-b64 options:
-              --file <base64-utf8-path-or-command>
-              --cwd <base64-utf8-working-directory>
-              --stdout <base64-utf8-remote-log-path>
-              --stderr <base64-utf8-remote-log-path>
-              --arg <base64-utf8-argument>
-
-            mkdir-b64 / delete-tree-b64 options:
-              --path <base64-utf8-windows-path>
-
-            copy-file-b64 options:
-              --source <base64-utf8-windows-source-path>
-              --destination <base64-utf8-windows-destination-path>
-
-            python-b64 options:
-              --script <base64-utf8-script-path>
-              --cwd <base64-utf8-working-directory>
-              --python <base64-utf8-python-path>
-              --conda-env <base64-utf8-env-name>
-              --conda-prefix <base64-utf8-prefix>
-              --arg <base64-utf8-script-argument>
-
-            powershell-b64 options:
-              --script <base64-utf8-script-body>
-              --cwd <base64-utf8-working-directory>
-              --exe <base64-utf8-powershell-path-or-command>
-
-            exec-file-b64 / exec-file-capture-b64 options:
-              --kind <base64-utf8-powershell-or-cmd>
-              --file <base64-utf8-remote-script-path>
-              --cwd <base64-utf8-working-directory>
-              --exe <base64-utf8-powershell-path-or-command>
-
-            wsl-b64 options:
-              --file <base64-utf8-linux-path>
-              --cwd <base64-utf8-linux-working-directory>
-              --distribution <base64-utf8-distro-name>
-              --user <base64-utf8-linux-user>
-              --arg <base64-utf8-argument>
-
-            wsl-capture-b64 options:
-              --file <base64-utf8-linux-path>
-              --cwd <base64-utf8-linux-working-directory>
-              --distribution <base64-utf8-distro-name>
-              --user <base64-utf8-linux-user>
-              --arg <base64-utf8-argument>
-
-            wsl-script-b64 options:
-              --script <base64-utf8-shell-script-body>
-              --shell <base64-utf8-linux-shell-path>
-              --cwd <base64-utf8-linux-working-directory>
-              --distribution <base64-utf8-distro-name>
-              --user <base64-utf8-linux-user>
-              --arg <base64-utf8-script-argument>
-
-            wsl-script-capture-b64 options:
-              --script <base64-utf8-shell-script-body>
-              --shell <base64-utf8-linux-shell-path>
-              --cwd <base64-utf8-linux-working-directory>
-              --distribution <base64-utf8-distro-name>
-              --user <base64-utf8-linux-user>
-              --arg <base64-utf8-script-argument>
-
-            wsl-resident-b64 options:
-              --stage-path <base64-utf8-staged-linux-path>
-              --launch-path <base64-utf8-linux-launch-path>
-              --shell <base64-utf8-linux-shell-path>
-              --cwd <base64-utf8-linux-working-directory>
-              --distribution <base64-utf8-distro-name>
-              --user <base64-utf8-linux-user>
-              --pid-file <base64-utf8-linux-pid-file>
-              --log-file <base64-utf8-linux-log-file>
-              --port <base64-utf8-port-number>
-              --health-url <base64-utf8-http-url>
-              --ready-timeout-seconds <base64-utf8-seconds>
-              --settle-delay-seconds <base64-utf8-seconds>
-              --poll-interval-ms <base64-utf8-milliseconds>
-              --diagnostic-lines <base64-utf8-count>
-              --arg <base64-utf8-script-argument>
-
-            everything-b64 options:
-              --query <base64-utf8-query>
-              --max <count>
-
-            security option:
-              --access-token <base64-utf8-token>
-
             rpc-stdio request:
               One UTF-8 JSON object on stdin. The response is one UTF-8 JSON object
-              on stdout. Supported actions: host.capabilities, host.probe,
-              process.capture, script.capture, file.writeText, file.readText.
-
-            invoke-b64 envelope:
-              A base64url UTF-8 JSON object with an action such as process.run,
-              process.capture, script.run, script.capture, wsl.run, wsl.capture,
-              wsl.script, wsl.resident, file.copy, guard.run, or repair.run.
+              on stdout. Supported actions are listed by host.capabilities.
             """);
     }
 }

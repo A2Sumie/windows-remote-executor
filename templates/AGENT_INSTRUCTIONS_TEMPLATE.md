@@ -11,15 +11,15 @@ Repository paths:
 - Native executor source: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
 
 Route rules:
-1. Prefer MCP tools for routine agent work. Use `win-remote` for manual debugging, release deployment, and compatibility; updated targets use the `invoke-b64` envelope under the wrapper.
+1. Prefer MCP tools for routine agent work. Use `win-remote` for manual debugging, release deployment, and bootstrap packaging; all remote control uses V3 `rpc-stdio`.
 2. Use `run`, `capture`, and `spawn` for concrete Windows executables with explicit argv.
 3. Use `capture` when process output needs stable parsing or raw bytes.
-4. Use `exec` / `exec-capture` with `--file` or `--stdin` for PowerShell/cmd script maintenance; these routes stage payloads through `exec-file-b64`.
+4. Use `exec` / `exec-capture` with `--file` or `--stdin` for PowerShell/cmd script maintenance; these routes send script bodies through V3 `script.run` / `script.capture`.
 5. The wrapper has a default guard for `powershell.exe` and `pwsh` through `run`, `capture`, and `spawn`; use `--allow-powershell` or another route when that is the lower-error choice.
 6. On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
-7. `argv-only` still allows staged `exec-file-b64` / `exec-file-capture-b64`; describe the route choice, not a blanket ban.
+7. `argv-only` still allows V3 script actions for staged maintenance; describe the route choice, not a blanket ban.
 8. Use `wsl` / `wsl-capture` for direct WSL argv.
-9. Use `wsl-sh` / `wsl-sh-capture` for longer Linux shell scripts; the wrapper stages the script through Windows transfer and bootstraps it into WSL `/tmp`.
+9. Use `wsl-sh` / `wsl-sh-capture` for longer Linux shell scripts; the script body is carried in V3 JSON and staged by the native executor.
 10. Use `wsl-py` / `wsl-py-capture` for WSL Python with explicit interpreter, cwd, module/script, and args.
 11. Use `wsl-resident` for durable WSL services and readiness diagnostics.
 12. Use `tasks` or MCP `win_tasks` for scheduled-task inspection.
@@ -27,6 +27,7 @@ Route rules:
 14. Keep WSL models, caches, venvs, and hot code on ext4 paths such as `/home/...`, not `/mnt/*`.
 15. Keep targets `private-only` unless the operator changes that requirement.
 16. Keep token enforcement, `access-policy.json`, and `sshd` guardrails in place.
+17. If existing routes cannot represent a workflow without fragile quoting, add a V3 RPC action plus MCP/tool support before adding another quoting convention.
 
 Suggested workflow:
 1. Read `AGENTS.md`.
@@ -37,11 +38,11 @@ Suggested workflow:
 6. Verify with the smallest route-specific smoke test: native `run`, staged `exec`, WSL capture, or `wsl-resident` proof.
 
 Release workflow:
-1. Commit changes on `main`.
+1. Commit changes on `main` or the active release branch.
 2. Push to GitHub.
 3. Create and push a version tag.
 4. Let GitHub Actions build release assets.
-5. Deploy release assets with `win-remote update-tools --native-zip <release-asset.zip>`; do not deploy production updates from local publish directories.
+5. Deploy release assets with `win-remote update-tools <target> --native-zip <release-asset.zip>`; do not treat local publish directories as production update proof.
 ```
 
 ## Short Variant
@@ -49,5 +50,5 @@ Release workflow:
 Use this shorter version when the agent context window is tight.
 
 ```md
-Use this repo's Windows Remote Executor. Prefer MCP tools for routine control and `win-remote` for manual debugging/release deployment. Updated targets use a single `invoke-b64` envelope under the wrapper; older targets fall back to `win-remote-legacy` until updated from a release asset. Choose the route with the lowest expected error rate: native argv for concrete executables, `capture` for parseable process output, staged `exec` for PowerShell/cmd scripts, `wsl`/`wsl-capture` for WSL argv, `wsl-sh` for longer WSL shell scripts, and `wsl-resident` for durable WSL services. The wrapper guards raw PowerShell in argv routes by default but has explicit escape hatches. `argv-only` rejects shell/interpreter executables through native argv routes while still allowing staged `exec-file-b64`. Keep targets private, keep policy and guardrails, keep WSL workloads on ext4, and verify with the route-specific smoke test.
+Use this repo's Windows Remote Executor. Prefer MCP tools for routine control and `win-remote` for manual debugging/release deployment. Remote control is V3-only through native `rpc-stdio`: fixed remote command, one JSON request on stdin, one JSON response on stdout. Choose the route with the lowest expected error rate: native argv for concrete executables, `capture` for parseable process output, staged `exec` for PowerShell/cmd scripts, `wsl`/`wsl-capture` for WSL argv, `wsl-sh` for longer WSL shell scripts, and `wsl-resident` for durable WSL services. The wrapper guards raw PowerShell in argv routes by default but has explicit escape hatches. `argv-only` rejects shell/interpreter executables through native argv routes while still allowing V3 script actions. Keep targets private, keep policy and guardrails, keep WSL workloads on ext4, and verify with the route-specific smoke test.
 ```

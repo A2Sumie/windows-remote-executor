@@ -105,7 +105,7 @@ internal sealed class BootstrapResult
     public string LogonRepairTaskName { get; init; } = string.Empty;
     public string StartupRepairTaskName { get; init; } = string.Empty;
     public string WatchRepairTaskName { get; init; } = string.Empty;
-    public bool RemovedLegacyCmdArtifacts { get; init; }
+    public bool RemovedOldCmdArtifacts { get; init; }
     public string SshConfigPath { get; init; } = @"C:\ProgramData\ssh\sshd_config";
 }
 
@@ -118,7 +118,7 @@ internal static class Bootstrapper
     private const string LogonRepairTaskName = "CodexRemote Sshd Repair Logon";
     private const string RepairStartupTaskName = "CodexRemote Sshd Repair Startup";
     private const string RepairWatchTaskName = "CodexRemote Sshd Repair Watch";
-    private const string LegacyStartupConsoleTaskName = "CodexRemote Console";
+    private const string OldStartupConsoleTaskName = "CodexRemote Console";
     private static readonly string OpenSshConfigPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
         "ssh",
@@ -193,7 +193,7 @@ internal static class Bootstrapper
             LogonRepairTaskName = startupRepair.LogonRepairTaskName,
             StartupRepairTaskName = startupRepair.StartupRepairTaskName,
             WatchRepairTaskName = startupRepair.WatchRepairTaskName,
-            RemovedLegacyCmdArtifacts = startupRepair.RemovedLegacyCmdArtifacts,
+            RemovedOldCmdArtifacts = startupRepair.RemovedOldCmdArtifacts,
         };
     }
 
@@ -300,7 +300,7 @@ internal static class Bootstrapper
         var nativeToolPath = Path.Combine(codexRoot, "tools", NativeToolFileName);
         var nativeLauncherPath = EnsureNativeLauncher(codexRoot, nativeToolPath);
         var repairLogPath = Path.Combine(codexRoot, "logs", "sshd-repair.log");
-        var removedLegacyCmdArtifacts = await RemoveLegacyCmdArtifactsAsync(codexRoot, targetUser);
+        var removedOldCmdArtifacts = await RemoveOldCmdArtifactsAsync(codexRoot, targetUser);
         var command = BuildSshRepairTaskCommand(codexRoot, listenAddress, nativeLauncherPath);
 
         await EnsureLogonRepairTaskAsync(targetUser, command, LogonRepairTaskName);
@@ -314,7 +314,7 @@ internal static class Bootstrapper
             LogonRepairTaskName,
             RepairStartupTaskName,
             RepairWatchTaskName,
-            removedLegacyCmdArtifacts);
+            removedOldCmdArtifacts);
     }
 
     private static void EnsureAuthorizedKeys(string targetUser, string authorizedKey)
@@ -364,26 +364,26 @@ internal static class Bootstrapper
             "Startup");
     }
 
-    private static async Task<bool> RemoveLegacyCmdArtifactsAsync(string codexRoot, string targetUser)
+    private static async Task<bool> RemoveOldCmdArtifactsAsync(string codexRoot, string targetUser)
     {
         var removed = false;
-        var legacyStartupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
-        var legacyFiles = new[]
+        var oldStartupPath = Path.Combine(GetStartupFolderPath(targetUser), "CodexRemote Console.cmd");
+        var oldFiles = new[]
         {
             Path.Combine(codexRoot, "tools", "codex-startup-console.cmd"),
             Path.Combine(codexRoot, "tools", "CodexRemote Console.cmd"),
             Path.Combine(codexRoot, "tools", "codex-repair-sshd.cmd"),
-            legacyStartupPath
+            oldStartupPath
         };
 
-        foreach (var file in legacyFiles)
+        foreach (var file in oldFiles)
         {
             removed |= TryDeleteFile(file);
         }
 
         var deleteResult = await RunProcessAllowFailureAsync(
             "schtasks.exe",
-            new[] { "/Delete", "/TN", LegacyStartupConsoleTaskName, "/F" });
+            new[] { "/Delete", "/TN", OldStartupConsoleTaskName, "/F" });
         removed |= deleteResult.ExitCode == 0;
         return removed;
     }
@@ -521,7 +521,7 @@ internal static class Bootstrapper
         }
         catch
         {
-            // Best effort cleanup of the legacy Startup-folder launcher.
+            // Best effort cleanup of the old Startup-folder launcher.
         }
 
         return false;
@@ -708,4 +708,4 @@ internal sealed record StartupRepairPaths(
     string LogonRepairTaskName,
     string StartupRepairTaskName,
     string WatchRepairTaskName,
-    bool RemovedLegacyCmdArtifacts);
+    bool RemovedOldCmdArtifacts);

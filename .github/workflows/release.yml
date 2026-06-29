@@ -25,7 +25,6 @@ jobs:
         run: |
           set -euo pipefail
           bash -n windows-remote-executor/bin/win-remote
-          bash -n windows-remote-executor/bin/win-remote-legacy
           bash -n windows-remote-executor/lib/common.sh
           bash -n windows-remote-executor/scripts/verify-remote-cases.sh
           bash -n windows-remote-executor/scripts/verify-v3-local.sh

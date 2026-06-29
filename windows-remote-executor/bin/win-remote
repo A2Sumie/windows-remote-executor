@@ -5,8 +5,4 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TOOL_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-if [[ "${WIN_REMOTE_LEGACY:-0}" == "1" ]]; then
-  exec "${SCRIPT_DIR}/win-remote-legacy" "$@"
-fi
-
 exec python3 "${TOOL_ROOT}/lib/win_remote_cli.py" "$@"

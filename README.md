@@ -5,15 +5,15 @@ Windows Remote Executor is a two-part toolkit for operating Windows hosts from m
 - `windows-remote-executor/` is the local Python wrapper plus a small shell shim
 - `windows-remote-executor-native/` is the Windows-side native executor
 
-In the parent `livestr` workspace, the legacy top-level paths may be symlinks into this repository. Keep this as the single source tree; do not maintain a second copy.
+In the parent `livestr` workspace, older top-level paths may be symlinks into this repository. Keep this as the single source tree; do not maintain a second copy.
 
-The design goal is simple: keep SSH as the transport and choose routes that minimize quoting, encoding, path, and command-length failures. Updated targets receive routine operations as one `invoke-b64` JSON envelope into the native executor, so user command text travels as structured data rather than shell syntax. Older targets keep working through `win-remote-legacy` until they are updated from a release asset.
+The design goal is simple: keep SSH as the transport and choose routes that minimize quoting, encoding, path, and command-length failures. V3 targets receive remote-control operations over the native `rpc-stdio` protocol: the SSH command is fixed, and user payload travels as one UTF-8 JSON request line on stdin rather than shell syntax or remote argv.
 
 For agentic clients, the preferred control plane is now the structured MCP server in `windows-remote-executor/MCP.md`, not ad hoc shell command generation.
 
 ## Features
 
-- remote native process and Python execution through a single `invoke-b64` envelope
+- remote native process and Python execution through V3 `rpc-stdio`
 - structured capture for localized or byte-sensitive process output
 - staged PowerShell/cmd script bridge for cases that are not naturally argv-shaped
 - structured WSL program and script execution so Linux-side work does not need `wsl.exe ... bash -lc ...`
@@ -65,7 +65,7 @@ If an agent opens this repository cold, the shortest safe path is:
 1. Read `AGENTS.md`.
 2. Read `windows-remote-executor/README.md`.
 3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
-4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, `exec`, and `update-tools`; updated targets use the native `invoke-b64` envelope under the wrapper.
+4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, `exec`, and `update-tools`; remote control uses V3 `rpc-stdio` through the native executor.
 5. Prefer the MCP server for routine agent use; use `exec --file` only when script control is actually needed.
 6. Keep long-lived WSL workloads on ext4 paths such as `/home/...`, not `/mnt/*`, and prefer `wsl-py-capture` / `wsl-capture` plus absolute interpreters for machine decisions.
 

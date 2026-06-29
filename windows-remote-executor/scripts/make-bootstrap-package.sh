@@ -25,7 +25,7 @@ Options:
 
 The package is meant for desktop-only bootstrap on a new Windows machine. Copy the
 zip to the Windows desktop, extract it, open an elevated PowerShell, and run the
-included install-wre-new-host.ps1.
+included deploy-wre-v3.ps1 wrapper.
 
 For a brand-new Windows machine that may not have the .NET 8 runtime installed,
 prefer the self-contained release asset
@@ -65,6 +65,14 @@ json_quote() {
 import json
 import sys
 print(json.dumps(sys.argv[1], ensure_ascii=False))
+PY
+}
+
+ps_quote() {
+  python3 - "$1" <<'PY'
+import sys
+value = sys.argv[1]
+print("'" + value.replace("'", "''") + "'")
 PY
 }
 
@@ -263,9 +271,64 @@ fi
 
 INSTALL_ARGS_PS=""
 for arg in "${INSTALL_ARGS[@]}"; do
-  quoted="$(json_quote "${arg}")"
+  quoted="$(ps_quote "${arg}")"
   INSTALL_ARGS_PS+=" ${quoted}"
 done
+
+INSTALL_TAILSCALE_PS='$false'
+if [[ ${INSTALL_TAILSCALE} -eq 1 ]]; then
+  INSTALL_TAILSCALE_PS='$true'
+fi
+
+cat >"${PACKAGE_DIR}/deploy-wre-v3.ps1" <<EOF
+[CmdletBinding()]
+param(
+    [string]\$TargetName = $(ps_quote "${TARGET_NAME}"),
+    [string]\$TargetUser = $(ps_quote "${TARGET_USER}"),
+    [string]\$ListenAddress = $(ps_quote "${LISTEN_ADDRESS}"),
+    [string]\$CodexRoot = $(ps_quote "${CODEX_ROOT}"),
+    [ValidateSet('standard', 'argv-only')]
+    [string]\$CommandMode = $(ps_quote "${COMMAND_MODE}"),
+    [switch]\$InstallTailscale
+)
+
+\$ErrorActionPreference = 'Stop'
+Set-ExecutionPolicy Bypass -Scope Process -Force
+\$scriptRoot = Split-Path -Parent \$PSCommandPath
+
+\$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+\$principal = New-Object Security.Principal.WindowsPrincipal(\$currentIdentity)
+if (-not \$principal.IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)) {
+    throw 'Run deploy-wre-v3.ps1 from an elevated PowerShell session.'
+}
+
+\$installer = Join-Path \$scriptRoot 'install-wre-new-host.ps1'
+if (-not (Test-Path -LiteralPath \$installer)) {
+    throw "Installer not found: \$installer"
+}
+if (-not (Test-Path -LiteralPath (Join-Path \$scriptRoot 'authorized_key.pub'))) {
+    throw 'authorized_key.pub is missing from this package.'
+}
+if (-not (Test-Path -LiteralPath (Join-Path \$scriptRoot 'native\WindowsRemoteExecutor.Native.exe'))) {
+    throw 'Native payload is missing from this package.'
+}
+
+\$installArgs = @(
+    '-TargetName', \$TargetName,
+    '-TargetUser', \$TargetUser,
+    '-CodexRoot', \$CodexRoot,
+    '-CommandMode', \$CommandMode
+)
+if (\$ListenAddress) {
+    \$installArgs += @('-ListenAddress', \$ListenAddress)
+}
+if (\$InstallTailscale -or ${INSTALL_TAILSCALE_PS}) {
+    \$installArgs += '-InstallTailscale'
+}
+
+Write-Host 'Deploying Windows Remote Executor V3...' -ForegroundColor Cyan
+& \$installer @installArgs
+EOF
 
 cat >"${PACKAGE_DIR}/README.txt" <<EOF
 Windows Remote Executor bootstrap package
@@ -284,8 +347,13 @@ Run on the Windows desktop:
 2. Open Windows Terminal / PowerShell as Administrator.
 3. Run:
 
-   Set-ExecutionPolicy Bypass -Scope Process -Force
    cd <this extracted folder>
+   .\deploy-wre-v3.ps1
+
+The deploy wrapper sets the process execution policy to Bypass, checks elevation,
+validates the packaged key/native payload, and calls install-wre-new-host.ps1 with
+these baked-in defaults:
+
    .\install-wre-new-host.ps1${INSTALL_ARGS_PS}
 
 The installer writes target-*.env beside itself and under C:\CodexRemote\logs.
@@ -308,6 +376,8 @@ cat >"${PACKAGE_DIR}/manifest.json" <<EOF
   "commandMode": $(json_quote "${COMMAND_MODE}"),
   "nativeKind": $(json_quote "${NATIVE_KIND}"),
   "nativeZip": $(json_quote "$(basename "${NATIVE_ZIP}")"),
+  "deploymentScript": "deploy-wre-v3.ps1",
+  "installerScript": "install-wre-new-host.ps1",
   "nativeZipSha256": $(json_quote "$(python3 - "${NATIVE_ZIP}" <<'PY'
 import hashlib
 import sys

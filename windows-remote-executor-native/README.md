@@ -1,66 +1,57 @@
 # Windows Remote Executor Native
 
-This is the Windows `.exe` companion for `windows-remote-executor/`. It exists so Codex-style tools can land one explicit executable on the Windows side and then prefer file transfer plus native process launch over direct PowerShell remoting.
+This is the Windows `.exe` companion for `windows-remote-executor/`. It exists so Codex-style tools can land one explicit executable on the Windows side and then prefer file transfer plus native V3 RPC over direct PowerShell remoting.
 
 ## Commands
 
-The current native CLI exposes:
+The current native CLI exposes only installation, maintenance, and V3 stdio entrypoints:
 
 - `bootstrap`
-- `bootstrap-x570` as a legacy alias
 - `guard-sshd`
 - `repair-sshd`
-- `probe`
 - `selftest`
-- `invoke-b64`
-- `run-b64`
-- `capture-b64`
-- `mkdir-b64`
-- `delete-tree-b64`
-- `copy-file-b64`
-- `python-b64`
-- `powershell-b64`
-- `exec-file-b64`
-- `exec-file-capture-b64`
-- `wsl-b64`
-- `wsl-capture-b64`
-- `wsl-script-b64`
-- `wsl-script-capture-b64`
-- `everything-b64`
+- `rpc-selftest`
+- `rpc-stdio`
 
-`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, removes any legacy `cmd` recovery artifacts, installs launcher-based `repair-sshd` scheduled tasks for logon/startup/watch recovery, configures service startup and recovery actions, and starts `sshd`.
+`bootstrap` installs or verifies OpenSSH Server, writes `sshd_config`, narrows listening to the selected local IP, writes authorized keys, removes old Startup-folder/cmd recovery artifacts, installs launcher-based `repair-sshd` scheduled tasks for logon/startup/watch recovery, configures service startup and recovery actions, and starts `sshd`.
 
 `guard-sshd` reads `access-policy.json`, checks configured and active `sshd` listeners, and disables the service when the host is in an unsafe state.
 
 `repair-sshd` revalidates `sshd`, rewrites a known-good managed `sshd_config` when needed, regenerates host keys, reapplies scoped firewall and service settings, and brings the service back to `Running`.
 
-`probe` returns machine state plus the active exposure policy label, listen addresses, and whether an access token is required.
+`selftest` and `rpc-selftest` validate V3 request serialization, hostile payload preservation, drive-relative path rejection, and the supported action list without touching Windows state.
 
-`invoke-b64` accepts one base64url UTF-8 JSON envelope and dispatches actions such as `process.run`, `process.capture`, `script.run`, `script.capture`, `wsl.run`, `wsl.capture`, `file.copy`, `guard.run`, and `repair.run`. This is the preferred v2 route because user command text travels as structured data in one token.
+`rpc-stdio` is the remote-control entrypoint. It reads one UTF-8 JSON object from stdin and writes one UTF-8 JSON object to stdout. The authoritative action list is returned by the `host.capabilities` RPC action.
 
-`selftest` validates the v2 envelope planner without touching Windows state and is safe to run during local build verification.
+## V3 RPC Surface
 
-`run-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, and the WSL commands execute payloads without depending on local shell quoting on the controlling machine. `exec-file-b64` is the preferred script bridge because the script body arrives as a staged file, not as a large base64 argv token.
+Current V3 actions:
 
-`mkdir-b64`, `delete-tree-b64`, and `copy-file-b64` are path-safe file operations used by the wrapper for paths that would be brittle over `scp` or `cmd.exe` parsing, such as paths with spaces, quotes, or shell metacharacters.
+- `host.capabilities`
+- `host.probe`
+- `host.guard`
+- `host.repair`
+- `host.tasks`
+- `host.policy`
+- `process.run`
+- `process.capture`
+- `process.spawn`
+- `script.run`
+- `script.capture`
+- `python.run`
+- `wsl.run`
+- `wsl.capture`
+- `wsl.script`
+- `wsl.script.capture`
+- `wsl.resident`
+- `file.writeText`
+- `file.readText`
+- `file.mkdir`
+- `file.deleteTree`
+- `file.copy`
+- `everything.search`
 
-`wsl-b64` and `wsl-capture-b64` run Linux programs through `wsl.exe --exec` with structured distro/user/cwd arguments.
-
-`wsl-script-b64` and `wsl-script-capture-b64` write a temporary shell script on the Windows side, translate the path into WSL form, and run it through a Linux shell without requiring `bash -lc` string composition. The higher-level `win-remote wsl-sh` wrapper now stages longer local scripts through file transfer first so it does not have to expand the whole payload into the Windows command line.
-
-`capture-b64` executes a native process and prints one JSON object with:
-
-- `exitCode`
-- `stdoutText`
-- `stderrText`
-- `stdoutEncoding`
-- `stderrEncoding`
-- `stdoutBase64`
-- `stderrBase64`
-- `stdoutBytes`
-- `stderrBytes`
-
-Use it when output may be UTF-16, locale-codepage, or byte-sensitive and you want one machine-readable payload instead of best-effort live text.
+See `../windows-remote-executor/V3.md` for request and response shapes.
 
 ## Access Policy
 
@@ -73,9 +64,9 @@ Use it when output may be UTF-16, locale-codepage, or byte-sensitive and you wan
 - `accessTokenSha256`
 - `updatedAt`
 
-If `accessTokenSha256` is present, the native executor requires a matching token for `probe`, `run-b64`, `capture-b64`, `mkdir-b64`, `delete-tree-b64`, `copy-file-b64`, `python-b64`, `powershell-b64`, `exec-file-b64`, `exec-file-capture-b64`, the WSL commands, and `everything-b64`.
+If `accessTokenSha256` is present, V3 RPC actions require the matching token where the corresponding operation is protected by policy. `public-with-token` is only valid when a token hash exists. The intended default is still `private-only`.
 
-`public-with-token` is only valid when a token hash exists. The intended default is still `private-only`.
+`commandMode=argv-only` blocks shell/interpreter executables through `process.run`, `process.capture`, and `process.spawn`; V3 script actions remain available for staged maintenance.
 
 ## Build
 
@@ -101,7 +92,7 @@ Optional self-contained single-file publish:
 ./windows-remote-executor-native/publish-scd-win-x64.sh
 ```
 
-This produces `windows-remote-executor-native/publish/scd-win-x64/WindowsRemoteExecutor.Native.exe`. It is convenient for drop-and-run deployment but more likely to trigger generic `.NET packer/compression` heuristics because the runtime is embedded in the executable.
+This produces `windows-remote-executor-native/publish/scd-win-x64/WindowsRemoteExecutor.Native.exe`. It is convenient for brand-new-host bootstrap and drop-and-run deployment but more likely to trigger generic `.NET packer/compression` heuristics because the runtime is embedded in the executable.
 
 `publish-win-x64.sh` is kept as a compatibility wrapper and currently points at the self-contained publish path.
 
@@ -117,9 +108,9 @@ Run from an elevated shell:
   --user Administrator `
   --listen-address 100.101.102.103
 
-.\WindowsRemoteExecutor.Native.exe probe
 .\WindowsRemoteExecutor.Native.exe guard-sshd --expected-listen-address 100.101.102.103
 .\WindowsRemoteExecutor.Native.exe repair-sshd --expected-listen-address 100.101.102.103
+.\WindowsRemoteExecutor.Native.exe rpc-selftest
 ```
 
 If you need to revert a host that was already switched to a PowerShell login shell:
@@ -131,17 +122,12 @@ If you need to revert a host that was already switched to a PowerShell login she
 ## Notes
 
 - The intended steady state is "PowerShell minimized", not "PowerShell everywhere".
-- PowerShell is still available, but it is expected to arrive through the wrapper's staged exec bridge before PowerShell starts.
-- Raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport are outside the supported path.
-- On `X570`, prefer direct native executables through `run-b64` for argv-shaped work. For shell-shaped work, use the staged exec-file bridge rather than raw shell command strings.
-- `run-b64` is a best-effort text path. `capture-b64` is the byte-preserving path when encoding is unclear.
-- `capture-b64` is normally reached through `win-remote capture`, which handles UTF-8 base64 argument transport for you.
-- `spawn-b64` is for Windows resident/background processes. It stages a short one-shot scheduled task, then uses `CreateProcessW` with explicit inheritable file handles for stdout/stderr from that detached context, so background launches do not keep SSH sessions open and callers do not pass through PowerShell `Start-Process` quoting.
-- `wsl-b64` is normally reached through `win-remote wsl`, and `wsl-script-b64` is normally reached through `win-remote wsl-sh`.
+- PowerShell is still available through V3 `script.run` / `script.capture` when script-shaped maintenance is the lower-error route.
+- Raw `powershell.exe`, `pwsh`, and hand-rolled `-EncodedCommand` transport are outside the normal supported path.
 - The stable remote tool directory is `C:\CodexRemote\tools\`.
 - `WindowsRemoteExecutor.cmd` is the stable launcher path; versioned native payloads can live under `C:\CodexRemote\tools\releases\...`.
 - `guard-sshd` is designed for scheduled-task use as well as one-shot validation.
-- Bootstrap installs three headless repair tasks: `CodexRemote Sshd Repair Logon`, `CodexRemote Sshd Repair Startup`, and `CodexRemote Sshd Repair Watch`.
-- Those tasks invoke the stable launcher for `repair-sshd`, so recovery no longer depends on `cmd.exe` wrappers or visible console windows and hot updates do not need to overwrite an in-use `.exe`.
+- Bootstrap installs headless repair tasks: `CodexRemote Sshd Repair Logon`, `CodexRemote Sshd Repair Startup`, and `CodexRemote Sshd Repair Watch`.
+- Those tasks invoke the stable launcher for `repair-sshd`, so recovery no longer depends on visible console windows and hot updates do not need to overwrite an in-use `.exe`.
 - `sshd` also gets Windows service recovery actions plus scheduled repair watch tasks so a later service stop is less likely to strand the host.
-- Everything search still depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.
+- Everything search depends on the SDK DLL being present next to the executable and on the Everything service being installed on the host.

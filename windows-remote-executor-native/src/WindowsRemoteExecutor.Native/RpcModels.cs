@@ -47,8 +47,8 @@ internal sealed class RpcResponse
         object? data = null,
         IReadOnlyList<string>? evidence = null)
     {
-        stdoutBytes ??= Array.Empty<byte>();
-        stderrBytes ??= Array.Empty<byte>();
+        stdoutBytes ??= System.Text.Encoding.UTF8.GetBytes(stdoutText);
+        stderrBytes ??= System.Text.Encoding.UTF8.GetBytes(stderrText);
         return new RpcResponse
         {
             Id = id,
@@ -98,19 +98,81 @@ internal sealed class RpcResponse
     }
 }
 
-internal sealed class ProcessCapturePayload
+internal sealed class ProcessPayload
 {
     public string File { get; init; } = string.Empty;
     public string? Cwd { get; init; }
+    public string? Stdout { get; init; }
+    public string? Stderr { get; init; }
     public IReadOnlyList<string> Args { get; init; } = Array.Empty<string>();
 }
 
-internal sealed class ScriptCapturePayload
+internal sealed class ScriptPayload
 {
     public string Kind { get; init; } = "powershell";
     public string Script { get; init; } = string.Empty;
     public string? Cwd { get; init; }
     public string? Exe { get; init; }
+}
+
+internal sealed class PythonRunPayload
+{
+    public string ScriptPath { get; init; } = string.Empty;
+    public string? Cwd { get; init; }
+    public string? Python { get; init; }
+    public string? CondaEnv { get; init; }
+    public string? CondaPrefix { get; init; }
+    public IReadOnlyList<string> Args { get; init; } = Array.Empty<string>();
+}
+
+internal sealed class WslProcessPayload
+{
+    public string File { get; init; } = string.Empty;
+    public string? Cwd { get; init; }
+    public string? Distribution { get; init; }
+    public string? User { get; init; }
+    public IReadOnlyList<string> Args { get; init; } = Array.Empty<string>();
+}
+
+internal sealed class WslScriptPayload
+{
+    public string Script { get; init; } = string.Empty;
+    public string? Cwd { get; init; }
+    public string? Distribution { get; init; }
+    public string? User { get; init; }
+    public string? Shell { get; init; }
+    public IReadOnlyList<string> Args { get; init; } = Array.Empty<string>();
+}
+
+internal sealed class WslResidentPayload
+{
+    public string Script { get; init; } = string.Empty;
+    public string? StagePath { get; init; }
+    public string? LaunchPath { get; init; }
+    public string? Cwd { get; init; }
+    public string? Distribution { get; init; }
+    public string? User { get; init; }
+    public string? Shell { get; init; }
+    public string? PidFile { get; init; }
+    public string? LogFile { get; init; }
+    public int? Port { get; init; }
+    public string? HealthUrl { get; init; }
+    public int? ReadyTimeoutSeconds { get; init; }
+    public int? SettleDelaySeconds { get; init; }
+    public int? PollIntervalMilliseconds { get; init; }
+    public int? DiagnosticLines { get; init; }
+    public IReadOnlyList<string> Args { get; init; } = Array.Empty<string>();
+}
+
+internal sealed class FilePathPayload
+{
+    public string Path { get; init; } = string.Empty;
+}
+
+internal sealed class FileCopyPayload
+{
+    public string Source { get; init; } = string.Empty;
+    public string Destination { get; init; } = string.Empty;
 }
 
 internal sealed class FileWriteTextPayload
@@ -123,6 +185,42 @@ internal sealed class FileReadTextPayload
 {
     public string Path { get; init; } = string.Empty;
     public int? MaxBytes { get; init; }
+}
+
+internal sealed class HostGuardPayload
+{
+    public string? ExpectedListenAddress { get; init; }
+    public string? LogPath { get; init; }
+    public bool NoDisable { get; init; }
+}
+
+internal sealed class HostRepairPayload
+{
+    public string? ExpectedListenAddress { get; init; }
+    public string? CodexRoot { get; init; }
+    public string? LogPath { get; init; }
+    public bool ForceRewrite { get; init; }
+}
+
+internal sealed class HostTasksPayload
+{
+    public IReadOnlyList<string> TaskNames { get; init; } = Array.Empty<string>();
+    public string? Prefix { get; init; }
+}
+
+internal sealed class HostPolicyPayload
+{
+    public string ExposureMode { get; init; } = "private-only";
+    public string CommandMode { get; init; } = "standard";
+    public string? ExpectedListenAddress { get; init; }
+    public string? Label { get; init; }
+    public string? Token { get; init; }
+}
+
+internal sealed class EverythingSearchPayload
+{
+    public string Query { get; init; } = string.Empty;
+    public int? Max { get; init; }
 }
 
 internal sealed class FileProof

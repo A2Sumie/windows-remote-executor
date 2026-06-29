@@ -133,6 +133,54 @@ class WreV3ClientTests(unittest.TestCase):
         self.assertTrue(call.ok)
         self.assertEqual(call.request["payload"]["file"], "C:/Program Files/PowerShell/7/pwsh.exe")
 
+    def test_expanded_v3_action_payloads_are_structured(self) -> None:
+        target = self.make_target()
+        stdout = json.dumps({"id": "req-actions", "ok": True, "exitCode": 0}) + "\n"
+        completed = subprocess.CompletedProcess(["ssh"], 0, stdout=stdout, stderr="")
+
+        with mock.patch.object(v3, "target_supports_rpc", return_value=True), \
+             mock.patch.object(v3.cli, "resolve_native_path", return_value="C:/CodexRemote/tools/WindowsRemoteExecutor.Native.exe"), \
+             mock.patch.object(v3.subprocess, "run", return_value=completed):
+            calls = [
+                v3.host_guard(target, expected_listen_address="100.64.1.2", log_path="C:/CodexRemote/logs/guard.log", no_disable=True),
+                v3.host_repair(target, codex_root="C:/CodexRemote", force_rewrite=True),
+                v3.host_tasks(target, task_names=["CodexRemote Sshd Repair Watch"], prefix="Codex"),
+                v3.host_policy(target, command_mode="argv-only", token="tok en"),
+                v3.process_spawn(target, "C:/Tools/app.exe", ["alpha beta"], stdout="C:/Logs/out.txt"),
+                v3.script_run(target, "echo hi", kind="cmd", cwd="C:/Work Dir"),
+                v3.python_run(target, "C:/Scripts/a.py", ["x"], conda_env="base"),
+                v3.wsl_script_capture(target, "printf '%s\\n' \"$1\"", ["x y"], cwd="/tmp", distribution="Ubuntu", user="sumie", shell="/bin/bash"),
+                v3.wsl_resident(target, "python3 -m http.server", port=8000, health_url="http://127.0.0.1:8000/"),
+                v3.file_mkdir(target, "C:/CodexRemote/inbox/new dir"),
+                v3.file_copy(target, "C:/CodexRemote/inbox/a.txt", "C:/CodexRemote/inbox/b.txt"),
+                v3.everything_search(target, "*.sln", max_results=5),
+            ]
+
+        actions = [call.request["action"] for call in calls]
+        self.assertEqual(
+            actions,
+            [
+                "host.guard",
+                "host.repair",
+                "host.tasks",
+                "host.policy",
+                "process.spawn",
+                "script.run",
+                "python.run",
+                "wsl.script.capture",
+                "wsl.resident",
+                "file.mkdir",
+                "file.copy",
+                "everything.search",
+            ],
+        )
+        self.assertEqual(calls[0].request["payload"]["logPath"], "C:/CodexRemote/logs/guard.log")
+        self.assertEqual(calls[3].request["payload"]["token"], "tok en")
+        self.assertEqual(calls[4].request["payload"]["args"], ["alpha beta"])
+        self.assertEqual(calls[7].request["payload"]["shell"], "/bin/bash")
+        self.assertIn("script", calls[8].request["payload"])
+        self.assertEqual(calls[11].request["payload"], {"query": "*.sln", "max": 5})
+
     def test_parse_rpc_response_uses_last_json_line(self) -> None:
         response = v3.parse_rpc_response('noise\n{"id":"req-3","ok":true,"exitCode":0}\n', "", 0)
         self.assertEqual(response["id"], "req-3")

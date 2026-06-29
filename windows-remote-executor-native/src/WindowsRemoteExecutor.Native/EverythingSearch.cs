@@ -59,9 +59,8 @@ internal static class EverythingSearch
     private const int EverythingErrorInvalidIndex = 6;
     private const int EverythingErrorInvalidCall = 7;
 
-    public static int SearchToStdout(string[] args)
+    public static IReadOnlyList<string> Search(EverythingSearchOptions options)
     {
-        var options = EverythingSearchOptions.FromBase64Args(args);
         EnsureSdkPresent();
 
         Everything_Reset();
@@ -76,9 +75,21 @@ internal static class EverythingSearch
         }
 
         var resultCount = Everything_GetNumResults();
+        var results = new List<string>();
         for (uint i = 0; i < resultCount; i++)
         {
-            Console.WriteLine(GetResultFullPath(i));
+            results.Add(GetResultFullPath(i));
+        }
+
+        return results;
+    }
+
+    public static int SearchToStdout(string[] args)
+    {
+        var options = EverythingSearchOptions.FromBase64Args(args);
+        foreach (var result in Search(options))
+        {
+            Console.WriteLine(result);
         }
 
         return 0;

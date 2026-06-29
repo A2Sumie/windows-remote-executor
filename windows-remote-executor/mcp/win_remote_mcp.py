@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Minimal MCP server for Windows Remote Executor.
+"""Minimal MCP server for Windows Remote Executor V3.
 
-This server exposes structured tools around `windows-remote-executor/bin/win-remote`
-so agent clients do not need to compose shell or PowerShell command strings.
+This server exposes structured tools around the rpc-stdio transport so agent
+clients do not need to compose shell or PowerShell command strings.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -26,25 +23,8 @@ import wre_v3_client as v3  # noqa: E402
 
 
 SERVER_NAME = "windows-remote-executor"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 PROTOCOL_VERSION = "2025-03-26"
-WIN_REMOTE = TOOL_ROOT / "bin" / "win-remote"
-
-
-@dataclass
-class CommandResult:
-    argv: list[str]
-    exit_code: int
-    stdout: str
-    stderr: str
-
-    def to_payload(self) -> dict[str, Any]:
-        return {
-            "argv": self.argv,
-            "exitCode": self.exit_code,
-            "stdout": self.stdout,
-            "stderr": self.stderr,
-        }
 
 
 def main() -> int:
@@ -443,345 +423,211 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
         return tool_error("Missing tool name.")
 
     try:
+        target = load_target(arguments) if name.startswith("win_") and "target" in arguments else None
+
         if name == "win_probe":
-            if use_v3_transport():
-                return format_rpc_call(v3.host_probe(load_target(arguments)))
-            result = run_win_remote(["probe", require_str(arguments, "target")])
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.host_probe(require_target(target)))
 
         if name == "win_run":
-            argv = ["run", require_str(arguments, "target")]
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if arguments.get("allow_powershell") is True:
-                argv.append("--allow-powershell")
-            argv.append(require_str(arguments, "program"))
-            argv.extend(optional_str_list(arguments, "args"))
-            result = run_win_remote(argv)
-            return format_result(result)
+            return format_rpc_call(v3.process_run(
+                require_target(target),
+                require_str(arguments, "program"),
+                optional_str_list(arguments, "args"),
+                cwd=optional_str(arguments, "cwd"),
+                allow_powershell=arguments.get("allow_powershell") is True,
+            ))
 
         if name == "win_capture":
-            if use_v3_transport():
-                return format_rpc_call(
-                    v3.process_capture(
-                        load_target(arguments),
-                        require_str(arguments, "program"),
-                        optional_str_list(arguments, "args"),
-                        cwd=optional_str(arguments, "cwd"),
-                        allow_powershell=arguments.get("allow_powershell") is True,
-                    )
-                )
-            argv = ["capture", require_str(arguments, "target")]
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if arguments.get("allow_powershell") is True:
-                argv.append("--allow-powershell")
-            argv.append(require_str(arguments, "program"))
-            argv.extend(optional_str_list(arguments, "args"))
-            result = run_win_remote(argv)
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.process_capture(
+                require_target(target),
+                require_str(arguments, "program"),
+                optional_str_list(arguments, "args"),
+                cwd=optional_str(arguments, "cwd"),
+                allow_powershell=arguments.get("allow_powershell") is True,
+            ))
 
         if name == "win_py":
-            argv = ["py", require_str(arguments, "target"), require_str(arguments, "script_path")]
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if python_path := optional_str(arguments, "python_path"):
-                argv.extend(["--python", python_path])
-            if conda_env := optional_str(arguments, "conda_env"):
-                argv.extend(["--conda-env", conda_env])
-            if conda_prefix := optional_str(arguments, "conda_prefix"):
-                argv.extend(["--conda-prefix", conda_prefix])
-            script_args = optional_str_list(arguments, "script_args")
-            if script_args:
-                argv.append("--")
-                argv.extend(script_args)
-            result = run_win_remote(argv)
-            return format_result(result)
+            return format_rpc_call(v3.python_run(
+                require_target(target),
+                require_str(arguments, "script_path"),
+                optional_str_list(arguments, "script_args"),
+                cwd=optional_str(arguments, "cwd"),
+                python=optional_str(arguments, "python_path"),
+                conda_env=optional_str(arguments, "conda_env"),
+                conda_prefix=optional_str(arguments, "conda_prefix"),
+            ))
 
         if name == "win_wsl":
-            argv = ["wsl", require_str(arguments, "target")]
-            if distribution := optional_str(arguments, "distribution"):
-                argv.extend(["--distro", distribution])
-            if user := optional_str(arguments, "user"):
-                argv.extend(["--user", user])
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
-                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
-            argv.append(require_str(arguments, "program"))
-            argv.extend(optional_str_list(arguments, "args"))
-            result = run_win_remote(argv)
-            return format_result(result)
+            return format_rpc_call(v3.wsl_run(
+                require_target(target),
+                require_str(arguments, "program"),
+                optional_str_list(arguments, "args"),
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+            ))
 
         if name == "win_wsl_capture":
-            argv = ["wsl-capture", require_str(arguments, "target")]
-            if distribution := optional_str(arguments, "distribution"):
-                argv.extend(["--distro", distribution])
-            if user := optional_str(arguments, "user"):
-                argv.extend(["--user", user])
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
-                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
-            argv.append(require_str(arguments, "program"))
-            argv.extend(optional_str_list(arguments, "args"))
-            result = run_win_remote(argv)
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.wsl_capture(
+                require_target(target),
+                require_str(arguments, "program"),
+                optional_str_list(arguments, "args"),
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+            ))
 
         if name == "win_wsl_py":
-            argv = build_wsl_py_argv("wsl-py", arguments)
-            result = run_win_remote(argv)
-            return format_result(result)
+            program, args = build_wsl_python_call(arguments)
+            return format_rpc_call(v3.wsl_run(
+                require_target(target),
+                program,
+                args,
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+            ))
 
         if name == "win_wsl_py_capture":
-            argv = build_wsl_py_argv("wsl-py-capture", arguments)
-            result = run_win_remote(argv)
-            return format_result(result, parse_stdout_json=True)
+            program, args = build_wsl_python_call(arguments)
+            return format_rpc_call(v3.wsl_capture(
+                require_target(target),
+                program,
+                args,
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+            ))
 
         if name == "win_wsl_script":
-            argv = ["wsl-sh", require_str(arguments, "target")]
-            if distribution := optional_str(arguments, "distribution"):
-                argv.extend(["--distro", distribution])
-            if user := optional_str(arguments, "user"):
-                argv.extend(["--user", user])
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if shell := optional_str(arguments, "shell"):
-                argv.extend(["--shell", shell])
-            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
-                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
-            argv.extend(["--stdin"])
-            script_args = optional_str_list(arguments, "script_args")
-            if script_args:
-                argv.append("--")
-                argv.extend(script_args)
-            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
-            return format_result(result)
+            return format_rpc_call(v3.wsl_script(
+                require_target(target),
+                require_str(arguments, "script"),
+                optional_str_list(arguments, "script_args"),
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+                shell=optional_str(arguments, "shell"),
+            ))
 
         if name == "win_wsl_script_capture":
-            argv = ["wsl-sh-capture", require_str(arguments, "target")]
-            if distribution := optional_str(arguments, "distribution"):
-                argv.extend(["--distro", distribution])
-            if user := optional_str(arguments, "user"):
-                argv.extend(["--user", user])
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if shell := optional_str(arguments, "shell"):
-                argv.extend(["--shell", shell])
-            if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
-                argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
-            argv.extend(["--stdin"])
-            script_args = optional_str_list(arguments, "script_args")
-            if script_args:
-                argv.append("--")
-                argv.extend(script_args)
-            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.wsl_script_capture(
+                require_target(target),
+                require_str(arguments, "script"),
+                optional_str_list(arguments, "script_args"),
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+                shell=optional_str(arguments, "shell"),
+            ))
 
         if name == "win_wsl_resident":
-            argv = ["wsl-resident", require_str(arguments, "target")]
-            if distribution := optional_str(arguments, "distribution"):
-                argv.extend(["--distro", distribution])
-            if user := optional_str(arguments, "user"):
-                argv.extend(["--user", user])
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if shell := optional_str(arguments, "shell"):
-                argv.extend(["--shell", shell])
-            if pid_file := optional_str(arguments, "pid_file"):
-                argv.extend(["--pid-file", pid_file])
-            if log_file := optional_str(arguments, "log_file"):
-                argv.extend(["--log-file", log_file])
-            if port := optional_int(arguments, "port"):
-                argv.extend(["--port", str(port)])
-            if health_url := optional_str(arguments, "health_url"):
-                argv.extend(["--health-url", health_url])
-            if ready_timeout := optional_int(arguments, "ready_timeout"):
-                argv.extend(["--ready-timeout", str(ready_timeout)])
-            if settle_delay := optional_int(arguments, "settle_delay", allow_zero=True):
-                argv.extend(["--settle-delay", str(settle_delay)])
-            if poll_interval_ms := optional_int(arguments, "poll_interval_ms"):
-                argv.extend(["--poll-interval-ms", str(poll_interval_ms)])
-            if diag_lines := optional_int(arguments, "diag_lines"):
-                argv.extend(["--diag-lines", str(diag_lines)])
-            argv.extend(["--stdin"])
-            script_args = optional_str_list(arguments, "script_args")
-            if script_args:
-                argv.append("--")
-                argv.extend(script_args)
-            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.wsl_resident(
+                require_target(target),
+                require_str(arguments, "script"),
+                optional_str_list(arguments, "script_args"),
+                cwd=optional_str(arguments, "cwd"),
+                distribution=optional_str(arguments, "distribution"),
+                user=optional_str(arguments, "user"),
+                shell=optional_str(arguments, "shell"),
+                pid_file=optional_str(arguments, "pid_file"),
+                log_file=optional_str(arguments, "log_file"),
+                port=optional_int(arguments, "port"),
+                health_url=optional_str(arguments, "health_url"),
+                ready_timeout_seconds=optional_int(arguments, "ready_timeout"),
+                settle_delay_seconds=optional_int(arguments, "settle_delay", allow_zero=True),
+                poll_interval_ms=optional_int(arguments, "poll_interval_ms"),
+                diagnostic_lines=optional_int(arguments, "diag_lines"),
+            ))
 
         if name == "win_put":
-            result = run_win_remote(
-                [
-                    "put",
-                    require_str(arguments, "target"),
-                    require_str(arguments, "local_path"),
-                    require_str(arguments, "remote_path"),
-                ]
-            )
-            return format_result(result)
+            target_obj = require_target(target)
+            local_path = Path(require_str(arguments, "local_path"))
+            remote_path = cli.normalize_remote_path(require_str(arguments, "remote_path"))
+            if not local_path.is_file():
+                raise ValueError(f"Local file not found: {local_path}")
+            mkdir_call = v3.file_mkdir(target_obj, cli.remote_parent(remote_path))
+            if not mkdir_call.ok:
+                return format_rpc_call(mkdir_call)
+            cli.scp_to_remote(target_obj, local_path, remote_path)
+            return tool_payload({"status": "ok", "transport": "v3", "localPath": str(local_path), "remotePath": remote_path})
 
         if name == "win_get":
-            result = run_win_remote(
-                [
-                    "get",
-                    require_str(arguments, "target"),
-                    require_str(arguments, "remote_path"),
-                    require_str(arguments, "local_path"),
-                ]
-            )
-            return format_result(result)
+            target_obj = require_target(target)
+            remote_path = cli.normalize_remote_path(require_str(arguments, "remote_path"))
+            local_path = Path(require_str(arguments, "local_path"))
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            cli.scp_from_remote(target_obj, remote_path, local_path)
+            return tool_payload({"status": "ok", "transport": "v3", "remotePath": remote_path, "localPath": str(local_path)})
 
         if name == "win_guard":
-            argv = ["guard", require_str(arguments, "target")]
-            if arguments.get("no_disable") is True:
-                argv.append("--no-disable")
-            if expected := optional_str(arguments, "expected_listen_address"):
-                argv.extend(["--expected-listen-address", expected])
-            result = run_win_remote(argv)
-            return format_result(result)
+            return format_rpc_call(v3.host_guard(
+                require_target(target),
+                expected_listen_address=optional_str(arguments, "expected_listen_address"),
+                no_disable=arguments.get("no_disable") is True,
+            ))
 
         if name == "win_repair":
-            argv = ["repair", require_str(arguments, "target")]
-            if arguments.get("force_rewrite") is True:
-                argv.append("--force-rewrite")
-            if expected := optional_str(arguments, "expected_listen_address"):
-                argv.extend(["--expected-listen-address", expected])
-            result = run_win_remote(argv)
-            return format_result(result)
+            return format_rpc_call(v3.host_repair(
+                require_target(target),
+                expected_listen_address=optional_str(arguments, "expected_listen_address"),
+                force_rewrite=arguments.get("force_rewrite") is True,
+            ))
 
         if name == "win_tasks":
-            argv = ["tasks", require_str(arguments, "target")]
-            for task_name in optional_str_list(arguments, "task_names"):
-                argv.extend(["--task-name", task_name])
-            if task_prefix := optional_str(arguments, "task_prefix"):
-                argv.extend(["--prefix", task_prefix])
-            result = run_win_remote(argv)
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.host_tasks(
+                require_target(target),
+                task_names=optional_str_list(arguments, "task_names"),
+                prefix=optional_str(arguments, "task_prefix"),
+            ))
 
         if name == "win_exec":
-            argv = ["exec", require_str(arguments, "target")]
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if shell := optional_str(arguments, "shell"):
-                argv.extend(["--shell", shell])
-            argv.append("--stdin")
-            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
-            return format_result(result)
+            return format_rpc_call(v3.script_run(
+                require_target(target),
+                require_str(arguments, "script"),
+                kind=optional_str(arguments, "shell") or "powershell",
+                cwd=optional_str(arguments, "cwd"),
+            ))
 
         if name == "win_exec_capture":
-            if use_v3_transport():
-                return format_rpc_call(
-                    v3.script_capture(
-                        load_target(arguments),
-                        require_str(arguments, "script"),
-                        kind=optional_str(arguments, "shell") or "powershell",
-                        cwd=optional_str(arguments, "cwd"),
-                    )
-                )
-            argv = ["exec-capture", require_str(arguments, "target")]
-            if cwd := optional_str(arguments, "cwd"):
-                argv.extend(["--cwd", cwd])
-            if shell := optional_str(arguments, "shell"):
-                argv.extend(["--shell", shell])
-            argv.append("--stdin")
-            result = run_win_remote(argv, stdin_text=require_str(arguments, "script"))
-            return format_result(result, parse_stdout_json=True)
+            return format_rpc_call(v3.script_capture(
+                require_target(target),
+                require_str(arguments, "script"),
+                kind=optional_str(arguments, "shell") or "powershell",
+                cwd=optional_str(arguments, "cwd"),
+            ))
 
         if name == "win_exec_ps_file":
-            result = run_win_remote(
-                [
-                    "exec",
-                    require_str(arguments, "target"),
-                    "--shell",
-                    "powershell",
-                    "--file",
-                    require_str(arguments, "file_path"),
-                ]
-            )
-            return format_result(result)
+            script = Path(require_str(arguments, "file_path")).read_text(encoding="utf-8")
+            return format_rpc_call(v3.script_run(require_target(target), script, kind="powershell"))
 
         if name == "win_exec_ps_script":
-            result = run_win_remote(
-                ["exec", require_str(arguments, "target"), "--shell", "powershell", "--stdin"],
-                stdin_text=require_str(arguments, "script"),
-            )
-            return format_result(result)
+            return format_rpc_call(v3.script_run(require_target(target), require_str(arguments, "script"), kind="powershell"))
 
         return tool_error(f"Unknown tool: {name}")
     except Exception as exc:  # noqa: BLE001
         return tool_error(str(exc))
 
 
-def run_win_remote(argv: list[str], stdin_text: str | None = None) -> CommandResult:
-    full_argv = [str(WIN_REMOTE), *argv]
-    completed = subprocess.run(
-        full_argv,
-        input=stdin_text,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
-    return CommandResult(
-        argv=full_argv,
-        exit_code=completed.returncode,
-        stdout=completed.stdout,
-        stderr=completed.stderr,
-    )
+def require_target(target: cli.Target | None) -> cli.Target:
+    if target is None:
+        raise ValueError("'target' is required and must be a non-empty string.")
+    return target
 
 
-def build_wsl_py_argv(command: str, arguments: dict[str, Any]) -> list[str]:
+def build_wsl_python_call(arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    python = optional_str(arguments, "python") or "python3"
     module = optional_str(arguments, "module")
     script_path = optional_str(arguments, "script_path")
     if bool(module) == bool(script_path):
         raise ValueError("Provide exactly one of 'module' or 'script_path'.")
-
-    argv = [command, require_str(arguments, "target")]
-    if distribution := optional_str(arguments, "distribution"):
-        argv.extend(["--distro", distribution])
-    if user := optional_str(arguments, "user"):
-        argv.extend(["--user", user])
-    if cwd := optional_str(arguments, "cwd"):
-        argv.extend(["--cwd", cwd])
-    if python := optional_str(arguments, "python"):
-        argv.extend(["--python", python])
-    if heartbeat_seconds := optional_int(arguments, "heartbeat_seconds"):
-        argv.extend(["--heartbeat-seconds", str(heartbeat_seconds)])
+    args: list[str] = []
     if module:
-        argv.extend(["--module", module])
+        args.extend(["-m", module])
     else:
-        argv.append(script_path or "")
-
-    script_args = optional_str_list(arguments, "script_args")
-    if script_args:
-        argv.append("--")
-        argv.extend(script_args)
-    return argv
-
-
-def format_result(result: CommandResult, parse_stdout_json: bool = False) -> dict[str, Any]:
-    payload = result.to_payload()
-    payload["status"] = "ok" if result.exit_code == 0 else "error"
-    if parse_stdout_json:
-        stripped = result.stdout.strip()
-        if stripped:
-            try:
-                payload["parsedStdout"] = json.loads(stripped)
-            except json.JSONDecodeError:
-                pass
-
-    text = json.dumps(payload, ensure_ascii=False, indent=2)
-    response: dict[str, Any] = {
-        "content": [{"type": "text", "text": text}],
-        "isError": result.exit_code != 0,
-    }
-    if "parsedStdout" in payload:
-        response["structuredContent"] = payload["parsedStdout"]
-    else:
-        response["structuredContent"] = payload
-    return response
+        args.append(script_path or "")
+    args.extend(optional_str_list(arguments, "script_args"))
+    return python, args
 
 
 def format_rpc_call(call: v3.RpcCall) -> dict[str, Any]:
@@ -802,14 +648,13 @@ def format_rpc_call(call: v3.RpcCall) -> dict[str, Any]:
     }
 
 
-def use_v3_transport() -> bool:
-    value = os.environ.get("WIN_REMOTE_MCP_TRANSPORT", "v3").strip().lower()
-    if value in {"", "v3"}:
-        return True
-    if value in {"legacy", "v2"}:
-        return False
-    raise ValueError("WIN_REMOTE_MCP_TRANSPORT must be 'legacy', 'v2', or 'v3'.")
-
+def tool_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    return {
+        "content": [{"type": "text", "text": text}],
+        "isError": False,
+        "structuredContent": payload,
+    }
 
 def load_target(arguments: dict[str, Any]) -> cli.Target:
     return cli.load_target(require_str(arguments, "target"))

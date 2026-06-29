@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import base64
-import json
+import io
+import subprocess
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest import mock
 
 import sys
 
@@ -17,24 +19,6 @@ import win_remote_cli as cli  # noqa: E402
 
 
 class WinRemoteCliTests(unittest.TestCase):
-    def test_envelope_preserves_hostile_arguments(self) -> None:
-        args = [
-            "space arg",
-            "quote \" arg",
-            "tick ` dollar $ paren $(x)",
-            "percent %PATH% bang !VAR! amp & pipe | lt < gt >",
-            "json {\"a\":[1,2]}",
-            "日本語 中文 한글",
-            "line1\nline2",
-        ]
-        request = {"action": "process.capture", "file": "C:/Tools/echo.exe", "cwd": "D:/Work Dir", "args": args}
-
-        envelope = cli.encode_envelope(request)
-        decoded = json.loads(cli.base64_url_decode(envelope).decode("utf-8"))
-
-        self.assertEqual(decoded, request)
-        self.assertNotRegex(envelope, cli.SCRIPT_ACTIVE_CHARS)
-
     def test_normalize_remote_path_rejects_drive_relative(self) -> None:
         with self.assertRaises(cli.WinRemoteError):
             cli.normalize_remote_path(r"D:StreamServfile.py")
@@ -70,11 +54,16 @@ class WinRemoteCliTests(unittest.TestCase):
         encoded = cli.b64_utf8("tok en")
         self.assertEqual(base64.b64decode(encoded).decode("utf-8"), "tok en")
 
-    def test_release_zip_validation_requires_fdd_release_shape(self) -> None:
+    def test_release_zip_validation_accepts_scd_and_fdd_release_shapes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
-            good = tmp_path / "windows-remote-executor-native-v1.2.3-fdd-win-x64.zip"
-            with zipfile.ZipFile(good, "w") as zf:
+            scd = tmp_path / "windows-remote-executor-native-v1.2.3-scd-win-x64.zip"
+            with zipfile.ZipFile(scd, "w") as zf:
+                zf.writestr("WindowsRemoteExecutor.Native.exe", "x")
+            self.assertEqual(cli.validate_release_native_zip(scd), "scd")
+
+            fdd = tmp_path / "windows-remote-executor-native-v1.2.3-fdd-win-x64.zip"
+            with zipfile.ZipFile(fdd, "w") as zf:
                 for name in [
                     "WindowsRemoteExecutor.Native.exe",
                     "WindowsRemoteExecutor.Native.dll",
@@ -82,7 +71,7 @@ class WinRemoteCliTests(unittest.TestCase):
                     "WindowsRemoteExecutor.Native.deps.json",
                 ]:
                     zf.writestr(name, "x")
-            cli.validate_release_native_zip(good)
+            self.assertEqual(cli.validate_release_native_zip(fdd), "fdd")
 
             wrong_name = tmp_path / "dev-build.zip"
             with zipfile.ZipFile(wrong_name, "w") as zf:
@@ -95,6 +84,52 @@ class WinRemoteCliTests(unittest.TestCase):
                 zf.writestr("WindowsRemoteExecutor.Native.exe", "x")
             with self.assertRaises(cli.WinRemoteError):
                 cli.validate_release_native_zip(missing)
+
+    def test_wsl_container_options_can_be_interleaved_with_wsl_options(self) -> None:
+        target = cli.Target(name="T", env_file=Path("t.env"), host="100.64.1.2", user="Administrator")
+        argv = [
+            "T",
+            "--distro", "Ubuntu",
+            "--container", "app one",
+            "--cwd", "/tmp/work",
+            "--container-cwd", "/srv/app",
+            "--shell", "/bin/bash",
+            "--container-user", "1000:1000",
+            "--stdin",
+            "--",
+            "alpha beta",
+        ]
+
+        with mock.patch.object(cli, "load_target", return_value=target), \
+             mock.patch.object(sys, "stdin", io.StringIO("printf '%s\\n' \"$1\"\n")):
+            parsed = cli.parse_wsl_container_script(argv, capture=True)
+
+        parsed_target, script, script_args, cwd, distro, user, shell, out_path, container = parsed
+        self.assertIs(parsed_target, target)
+        self.assertEqual(script, "printf '%s\\n' \"$1\"\n")
+        self.assertEqual(script_args, ["alpha beta"])
+        self.assertEqual(cwd, "/tmp/work")
+        self.assertEqual(distro, "Ubuntu")
+        self.assertIsNone(user)
+        self.assertEqual(shell, "/bin/bash")
+        self.assertIsNone(out_path)
+        self.assertEqual(container["name"], "app one")
+        self.assertEqual(container["cwd"], "/srv/app")
+        self.assertEqual(container["user"], "1000:1000")
+
+    def test_scp_remote_path_is_one_argv_token(self) -> None:
+        target = cli.Target(name="T", env_file=Path("t.env"), host="100.64.1.2", user="Administrator")
+        with tempfile.TemporaryDirectory() as tmp:
+            local_path = Path(tmp) / "payload.txt"
+            local_path.write_text("x", encoding="utf-8")
+            completed = subprocess.CompletedProcess(["scp"], 0)
+            remote_path = "C:/CodexRemote/inbox/literal `tick` (semi; amp&) bang! caret^.txt"
+
+            with mock.patch.object(cli.subprocess, "run", return_value=completed) as run:
+                cli.scp_to_remote(target, local_path, remote_path)
+
+        argv = run.call_args.args[0]
+        self.assertEqual(argv[-1], f"{target.user}@{target.host}:{remote_path}")
 
 
 if __name__ == "__main__":
