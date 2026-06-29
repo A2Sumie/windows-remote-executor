@@ -685,13 +685,29 @@ def cmd_update_tools(args: list[str]) -> int:
                     continue
                 with zf.open(info) as src, (extract_dir / name).open("wb") as dst:
                     shutil.copyfileobj(src, dst)
-        v3().file_mkdir(target, release_dir)
+        ensure_remote_dir_for_update(target, release_dir)
         for item in extract_dir.iterdir():
             if item.is_file():
                 scp_to_remote(target, item, f"{release_dir}/{item.name}")
         v3().file_write_text(target, target.native_current_file, release_dir)
     print("OK")
     return 0
+
+
+def ensure_remote_dir_for_update(target: Target, remote_dir: str) -> None:
+    call = v3().file_mkdir(target, remote_dir)
+    if call.ok:
+        return
+    if call.response.get("errorClass") != "unsupported":
+        raise WinRemoteError(str(call.response.get("stderrText") or call.ssh_stderr or "file.mkdir failed"), call.exit_code)
+    script = "$ErrorActionPreference = 'Stop'\nNew-Item -ItemType Directory -Force -LiteralPath {0} | Out-Null\n".format(ps_single_quote(remote_dir))
+    fallback = v3().script_capture(target, script)
+    if not fallback.ok:
+        raise WinRemoteError(str(fallback.response.get("stderrText") or fallback.ssh_stderr or "script.capture mkdir fallback failed"), fallback.exit_code)
+
+
+def ps_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
 
 
 def cmd_selftest() -> int:

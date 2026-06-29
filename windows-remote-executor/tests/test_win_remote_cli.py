@@ -117,6 +117,46 @@ class WinRemoteCliTests(unittest.TestCase):
         self.assertEqual(container["cwd"], "/srv/app")
         self.assertEqual(container["user"], "1000:1000")
 
+    def test_update_tools_mkdir_uses_file_mkdir_when_supported(self) -> None:
+        target = cli.Target(name="T", env_file=Path("t.env"), host="100.64.1.2", user="Administrator")
+        ok_call = mock.Mock(ok=True)
+        client = mock.Mock()
+        client.file_mkdir.return_value = ok_call
+
+        with mock.patch.object(cli, "v3", return_value=client):
+            cli.ensure_remote_dir_for_update(target, "C:/CodexRemote/tools/releases/v3-test")
+
+        client.file_mkdir.assert_called_once_with(target, "C:/CodexRemote/tools/releases/v3-test")
+        client.script_capture.assert_not_called()
+
+    def test_update_tools_mkdir_falls_back_for_old_v3_subset(self) -> None:
+        target = cli.Target(name="T", env_file=Path("t.env"), host="100.64.1.2", user="Administrator")
+        mkdir_call = mock.Mock(ok=False, response={"errorClass": "unsupported"}, ssh_stderr="", exit_code=2)
+        fallback_call = mock.Mock(ok=True)
+        client = mock.Mock()
+        client.file_mkdir.return_value = mkdir_call
+        client.script_capture.return_value = fallback_call
+
+        with mock.patch.object(cli, "v3", return_value=client):
+            cli.ensure_remote_dir_for_update(target, "C:/CodexRemote/tools/releases/quote ' dir")
+
+        client.file_mkdir.assert_called_once_with(target, "C:/CodexRemote/tools/releases/quote ' dir")
+        fallback_script = client.script_capture.call_args.args[1]
+        self.assertIn("New-Item -ItemType Directory -Force", fallback_script)
+        self.assertIn("'C:/CodexRemote/tools/releases/quote '' dir'", fallback_script)
+
+    def test_update_tools_mkdir_does_not_hide_other_failures(self) -> None:
+        target = cli.Target(name="T", env_file=Path("t.env"), host="100.64.1.2", user="Administrator")
+        mkdir_call = mock.Mock(ok=False, response={"errorClass": "auth", "stderrText": "no token"}, ssh_stderr="", exit_code=3)
+        client = mock.Mock()
+        client.file_mkdir.return_value = mkdir_call
+
+        with mock.patch.object(cli, "v3", return_value=client):
+            with self.assertRaisesRegex(cli.WinRemoteError, "no token"):
+                cli.ensure_remote_dir_for_update(target, "C:/CodexRemote/tools/releases/v3-test")
+
+        client.script_capture.assert_not_called()
+
     def test_scp_remote_path_is_one_argv_token(self) -> None:
         target = cli.Target(name="T", env_file=Path("t.env"), host="100.64.1.2", user="Administrator")
         with tempfile.TemporaryDirectory() as tmp:
