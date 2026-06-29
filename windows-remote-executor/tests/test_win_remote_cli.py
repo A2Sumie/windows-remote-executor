@@ -142,7 +142,7 @@ class WinRemoteCliTests(unittest.TestCase):
 
         client.file_mkdir.assert_called_once_with(target, "C:/CodexRemote/tools/releases/quote ' dir")
         fallback_script = client.script_capture.call_args.args[1]
-        self.assertIn("New-Item -ItemType Directory -Force", fallback_script)
+        self.assertIn("[System.IO.Directory]::CreateDirectory", fallback_script)
         self.assertIn("'C:/CodexRemote/tools/releases/quote '' dir'", fallback_script)
 
     def test_update_tools_mkdir_does_not_hide_other_failures(self) -> None:

@@ -700,7 +700,7 @@ def ensure_remote_dir_for_update(target: Target, remote_dir: str) -> None:
         return
     if call.response.get("errorClass") != "unsupported":
         raise WinRemoteError(str(call.response.get("stderrText") or call.ssh_stderr or "file.mkdir failed"), call.exit_code)
-    script = "$ErrorActionPreference = 'Stop'\nNew-Item -ItemType Directory -Force -LiteralPath {0} | Out-Null\n".format(ps_single_quote(remote_dir))
+    script = "$ErrorActionPreference = 'Stop'\n[System.IO.Directory]::CreateDirectory({0}) | Out-Null\n".format(ps_single_quote(remote_dir))
     fallback = v3().script_capture(target, script)
     if not fallback.ok:
         raise WinRemoteError(str(fallback.response.get("stderrText") or fallback.ssh_stderr or "script.capture mkdir fallback failed"), fallback.exit_code)
