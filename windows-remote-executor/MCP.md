@@ -23,9 +23,9 @@ That means the model calls a tool like `win_run` instead of generating:
 ./windows-remote-executor/bin/win-remote run X570 ...
 ```
 
-This removes day-to-day quoting drift from the model layer. The C# native executor owns process launch and structured argv handling; MCP owns JSON-shaped tool calls; the Python wrapper turns those calls into one `invoke-b64` envelope when the target supports it and uses `win-remote-legacy` only for compatibility with older deployed targets.
+This removes day-to-day quoting drift from the model layer. The C# native executor owns process launch and structured argv handling; MCP owns JSON-shaped tool calls. For V3-covered tools, MCP calls the Python V3 client and native `rpc-stdio` transport directly. Other tools still use the `win-remote` wrapper and its `invoke-b64` envelope where available; `win-remote-legacy` is now an explicit compatibility and rollback path for older deployed targets.
 
-V3 adds an experimental direct `rpc-stdio` transport for `win_probe`, `win_capture`, and `win_exec_capture`. It keeps the SSH command fixed as `WindowsRemoteExecutor.Native.exe rpc-stdio` and sends user payload as one JSON request on stdin. Leave MCP on the legacy/V2 path unless `WIN_REMOTE_MCP_TRANSPORT=v3` is set and the target has passed the V3 matrix.
+V3 direct `rpc-stdio` is the default MCP transport for `win_probe`, `win_capture`, and `win_exec_capture` after the target has passed the V3 matrix. It keeps the SSH command fixed as `WindowsRemoteExecutor.Native.exe rpc-stdio` and sends user payload as one JSON request on stdin. Set `WIN_REMOTE_MCP_TRANSPORT=legacy` or `WIN_REMOTE_MCP_TRANSPORT=v2` to force the older wrapper path for those tools.
 
 ## Run
 
@@ -33,10 +33,10 @@ V3 adds an experimental direct `rpc-stdio` transport for `win_probe`, `win_captu
 python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 ```
 
-Run the experimental V3 transport only after deploying a native executor that advertises `rpc-stdio`:
+`win_probe`, `win_capture`, and `win_exec_capture` use V3 by default. Force the older wrapper path only when rolling back or controlling a target that has not passed the V3 matrix:
 
 ```bash
-WIN_REMOTE_MCP_TRANSPORT=v3 python3 ./windows-remote-executor/mcp/win_remote_mcp.py
+WIN_REMOTE_MCP_TRANSPORT=legacy python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 ```
 
 ## Exposed tools
@@ -67,8 +67,8 @@ WIN_REMOTE_MCP_TRANSPORT=v3 python3 ./windows-remote-executor/mcp/win_remote_mcp
 - `win_run` and `win_capture` inherit the wrapper guardrails.
 - Raw `powershell.exe` / `pwsh` through those argv routes hits the default guard unless the caller explicitly enables the wrapper escape hatch.
 - If PowerShell or cmd script control is the lower-error route, use `win_exec` / `win_exec_capture`; the PowerShell-specific tools remain compatibility aliases.
-- The wrapper checks target native support before using `invoke-b64`. Older targets fall back to `win-remote-legacy` until updated from a GitHub release asset.
-- With `WIN_REMOTE_MCP_TRANSPORT=v3`, `win_probe`, `win_capture`, and `win_exec_capture` call the Python V3 client directly instead of shelling out to `win-remote`. Other tools remain on the legacy/V2 wrapper path.
+- The wrapper checks target native support before using `invoke-b64`. Older targets can still use `win-remote-legacy` until updated from a GitHub release asset.
+- By default, `win_probe`, `win_capture`, and `win_exec_capture` call the Python V3 client directly instead of shelling out to `win-remote`. Other tools remain on the wrapper path until they gain V3 actions. Set `WIN_REMOTE_MCP_TRANSPORT=legacy` or `WIN_REMOTE_MCP_TRANSPORT=v2` to force the older path for V3-covered tools.
 - Remote Windows paths should be passed with forward slashes or as quoted backslash strings. Drive-relative shapes such as `D:folderfile.py` are rejected before remote execution.
 
 ## WSL stance

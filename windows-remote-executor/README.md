@@ -2,14 +2,14 @@
 
 This toolkit lets a macOS or Linux host drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and staged script execution that does not depend on fragile local quoting.
 
-For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. The `win-remote` wrapper is a Python CLI with a small shell shim; updated targets receive one `invoke-b64` JSON envelope, while `win-remote-legacy` remains only as a compatibility path for older deployed native executors. V3 adds an experimental `rpc-stdio` transport that sends user payload on stdin; keep V2 as fallback until the target passes both V3 and V2 verification.
+For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. V3 `rpc-stdio` sends user payload on stdin and is the default for MCP tools that support it after the target passes the V3 matrix. The `win-remote` wrapper remains a Python CLI with a small shell shim for manual work and tools that have not moved to V3; `win-remote-legacy` is only an explicit compatibility or rollback path for older deployed native executors.
 
 This is a hard stability boundary: if a task can be expressed as argv, script body, file upload/download, WSL program, scheduled-task query, or PowerShell file/stdin, use the native/MCP path. Avoid raw `cmd.exe`, raw `powershell.exe`, `wsl.exe ... bash -lc ...`, or hand-built Windows command strings in agent work.
 
 The intended steady state is:
 
 - direct native process launch, staged `scp`, and a native C# Windows executor for routine work
-- a single structured `invoke-b64` envelope, or V3 `rpc-stdio` stdin JSON, instead of quote-sensitive command strings
+- V3 `rpc-stdio` stdin JSON for covered MCP tools, and a single structured `invoke-b64` envelope for wrapper-only tools, instead of quote-sensitive command strings
 - PowerShell or cmd script control only through the wrapper's staged exec bridge
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
@@ -199,10 +199,11 @@ gh release download vX.Y.Z -p 'windows-remote-executor-native-vX.Y.Z-fdd-win-x64
 ./windows-remote-executor/bin/win-remote update-tools winbox --native-zip /tmp/wre-release/windows-remote-executor-native-vX.Y.Z-fdd-win-x64.zip
 ```
 
-For V3 rollout, deploy the release asset with existing V2 `update-tools`, then run both matrices before changing defaults:
+For V3 rollout, deploy the release asset with existing `update-tools`, run the V3 matrix, then use V3 as the MCP default for covered tools. Run the V2 regression matrix only when you need historical compatibility evidence or rollback diagnostics:
 
 ```bash
 ./windows-remote-executor/scripts/verify-v3-remote-cases.sh winbox
+# optional historical compatibility check:
 ./windows-remote-executor/scripts/verify-remote-cases.sh winbox
 ```
 

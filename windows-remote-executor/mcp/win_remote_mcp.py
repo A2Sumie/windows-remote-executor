@@ -803,12 +803,12 @@ def format_rpc_call(call: v3.RpcCall) -> dict[str, Any]:
 
 
 def use_v3_transport() -> bool:
-    value = os.environ.get("WIN_REMOTE_MCP_TRANSPORT", "legacy").strip().lower()
-    if value in {"", "legacy", "v2"}:
-        return False
-    if value == "v3":
+    value = os.environ.get("WIN_REMOTE_MCP_TRANSPORT", "v3").strip().lower()
+    if value in {"", "v3"}:
         return True
-    raise ValueError("WIN_REMOTE_MCP_TRANSPORT must be 'legacy' or 'v3'.")
+    if value in {"legacy", "v2"}:
+        return False
+    raise ValueError("WIN_REMOTE_MCP_TRANSPORT must be 'legacy', 'v2', or 'v3'.")
 
 
 def load_target(arguments: dict[str, Any]) -> cli.Target:

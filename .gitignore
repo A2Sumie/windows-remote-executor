@@ -6,6 +6,7 @@ windows-remote-executor/targets/*.env
 !windows-remote-executor/targets/example.env
 windows-remote-executor/RETRY_X570.md
 windows-remote-executor/scripts/x570-*.sh
+windows-remote-executor/dist/
 
 windows-remote-executor-native/publish/
 windows-remote-executor-native/src/WindowsRemoteExecutor.Native/bin/

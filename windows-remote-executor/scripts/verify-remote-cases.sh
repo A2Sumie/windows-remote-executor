@@ -186,7 +186,7 @@ if [[ ${ARGV_ONLY} -eq 0 ]]; then
   status_line "structured exec fallback for older native executor"
   EXEC_FALLBACK_LOG="${TMP_DIR}/exec-fallback.log"
   EXEC_FALLBACK_ERR="${TMP_DIR}/exec-fallback.err"
-  WIN_REMOTE_FORCE_EXEC_FALLBACK=1 "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_FALLBACK_LOG}" 2>"${EXEC_FALLBACK_ERR}" <<'EOF'
+  WIN_REMOTE_LEGACY=1 WIN_REMOTE_FORCE_EXEC_FALLBACK=1 "${WIN_REMOTE}" exec "${TARGET}" --stdin >"${EXEC_FALLBACK_LOG}" 2>"${EXEC_FALLBACK_ERR}" <<'EOF'
 Write-Output 'structured-exec-fallback-ok'
 EOF
   grep -q 'structured-exec-fallback-ok' "${EXEC_FALLBACK_LOG}"
