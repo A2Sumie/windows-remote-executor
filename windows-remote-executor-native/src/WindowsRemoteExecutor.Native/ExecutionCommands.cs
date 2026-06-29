@@ -1704,6 +1704,7 @@ internal static class WindowsProcessSpawner
     private const uint CreateNewProcessGroup = 0x00000200;
     private const uint CreateNoWindow = 0x08000000;
     private const uint CreateBreakawayFromJob = 0x01000000;
+    private const uint HandleFlagInherit = 0x00000001;
     private const int StdErrorHandle = -12;
     private const ushort SwHide = 0;
 
@@ -1796,6 +1797,8 @@ internal static class WindowsProcessSpawner
             throw new Win32Exception(Marshal.GetLastWin32Error(), $"Failed to open '{path}'.");
         }
 
+        EnsureHandleInheritable(handle.DangerousGetHandle());
+
         if (append)
         {
             SetFilePointerEx(handle, 0, out _, 2);
@@ -1818,7 +1821,16 @@ internal static class WindowsProcessSpawner
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to duplicate stderr handle.");
         }
+        EnsureHandleInheritable(target);
         return new SafeFileHandle(target, ownsHandle: true);
+    }
+
+    private static void EnsureHandleInheritable(IntPtr handle)
+    {
+        if (!SetHandleInformation(handle, HandleFlagInherit, HandleFlagInherit))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to mark stdio handle inheritable.");
+        }
     }
 
     private static void EnsureParentDirectory(string path)
@@ -1906,6 +1918,9 @@ internal static class WindowsProcessSpawner
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool SetFilePointerEx(SafeFileHandle hFile, long liDistanceToMove, out long lpNewFilePointer, uint dwMoveMethod);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool DuplicateHandle(
