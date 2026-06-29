@@ -8,6 +8,7 @@ so agent clients do not need to compose shell or PowerShell command strings.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -15,10 +16,19 @@ from pathlib import Path
 from typing import Any
 
 
+TOOL_ROOT = Path(__file__).resolve().parents[1]
+LIB_DIR = TOOL_ROOT / "lib"
+if str(LIB_DIR) not in sys.path:
+    sys.path.insert(0, str(LIB_DIR))
+
+import win_remote_cli as cli  # noqa: E402
+import wre_v3_client as v3  # noqa: E402
+
+
 SERVER_NAME = "windows-remote-executor"
 SERVER_VERSION = "0.2.0"
 PROTOCOL_VERSION = "2025-03-26"
-WIN_REMOTE = Path(__file__).resolve().parents[1] / "bin" / "win-remote"
+WIN_REMOTE = TOOL_ROOT / "bin" / "win-remote"
 
 
 @dataclass
@@ -434,6 +444,8 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
 
     try:
         if name == "win_probe":
+            if use_v3_transport():
+                return format_rpc_call(v3.host_probe(load_target(arguments)))
             result = run_win_remote(["probe", require_str(arguments, "target")])
             return format_result(result, parse_stdout_json=True)
 
@@ -449,6 +461,16 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
             return format_result(result)
 
         if name == "win_capture":
+            if use_v3_transport():
+                return format_rpc_call(
+                    v3.process_capture(
+                        load_target(arguments),
+                        require_str(arguments, "program"),
+                        optional_str_list(arguments, "args"),
+                        cwd=optional_str(arguments, "cwd"),
+                        allow_powershell=arguments.get("allow_powershell") is True,
+                    )
+                )
             argv = ["capture", require_str(arguments, "target")]
             if cwd := optional_str(arguments, "cwd"):
                 argv.extend(["--cwd", cwd])
@@ -650,6 +672,15 @@ def handle_tool_call(name: str | None, arguments: dict[str, Any]) -> dict[str, A
             return format_result(result)
 
         if name == "win_exec_capture":
+            if use_v3_transport():
+                return format_rpc_call(
+                    v3.script_capture(
+                        load_target(arguments),
+                        require_str(arguments, "script"),
+                        kind=optional_str(arguments, "shell") or "powershell",
+                        cwd=optional_str(arguments, "cwd"),
+                    )
+                )
             argv = ["exec-capture", require_str(arguments, "target")]
             if cwd := optional_str(arguments, "cwd"):
                 argv.extend(["--cwd", cwd])
@@ -751,6 +782,37 @@ def format_result(result: CommandResult, parse_stdout_json: bool = False) -> dic
     else:
         response["structuredContent"] = payload
     return response
+
+
+def format_rpc_call(call: v3.RpcCall) -> dict[str, Any]:
+    payload = {
+        "argv": call.argv,
+        "exitCode": call.exit_code,
+        "stdout": call.response.get("stdoutText", ""),
+        "stderr": call.response.get("stderrText", "") or call.ssh_stderr,
+        "transport": "v3",
+        "status": "ok" if call.ok else "error",
+        "rpc": call.response,
+    }
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    return {
+        "content": [{"type": "text", "text": text}],
+        "isError": not call.ok,
+        "structuredContent": call.response,
+    }
+
+
+def use_v3_transport() -> bool:
+    value = os.environ.get("WIN_REMOTE_MCP_TRANSPORT", "legacy").strip().lower()
+    if value in {"", "legacy", "v2"}:
+        return False
+    if value == "v3":
+        return True
+    raise ValueError("WIN_REMOTE_MCP_TRANSPORT must be 'legacy' or 'v3'.")
+
+
+def load_target(arguments: dict[str, Any]) -> cli.Target:
+    return cli.load_target(require_str(arguments, "target"))
 
 
 def tool_error(message: str) -> dict[str, Any]:

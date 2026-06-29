@@ -821,7 +821,8 @@ def pop_value(args: list[str], option: str) -> str:
 
 def guard_raw_powershell(command: str, allow: bool, program: str) -> None:
     name = Path(program.replace("\\", "/")).name.lower()
-    if not allow and name in RAW_POWERSHELL:
+    env_allow = os.environ.get("WIN_REMOTE_ALLOW_RAW_POWERSHELL", "0") == "1"
+    if not allow and not env_allow and name in RAW_POWERSHELL:
         raise WinRemoteError(f"{command} blocks raw PowerShell transport by default: {program}. Use exec --file/--stdin, or pass --allow-powershell for an intentional escape hatch.", 2)
 
 

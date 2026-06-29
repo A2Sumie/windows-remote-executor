@@ -2,14 +2,14 @@
 
 This toolkit lets a macOS or Linux host drive a Windows machine over SSH without making PowerShell the primary transport. It is built for Codex and similar agentic tools that need reliable file transfer, native process launch, JSON probing, and staged script execution that does not depend on fragile local quoting.
 
-For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. The `win-remote` wrapper is a Python CLI with a small shell shim; updated targets receive one `invoke-b64` JSON envelope, while `win-remote-legacy` remains only as a compatibility path for older deployed native executors.
+For agentic clients, the preferred entrypoint is the C# native executor through the structured MCP server in `MCP.md`. Do not treat shell command generation as the normal control plane. The `win-remote` wrapper is a Python CLI with a small shell shim; updated targets receive one `invoke-b64` JSON envelope, while `win-remote-legacy` remains only as a compatibility path for older deployed native executors. V3 adds an experimental `rpc-stdio` transport that sends user payload on stdin; keep V2 as fallback until the target passes both V3 and V2 verification.
 
 This is a hard stability boundary: if a task can be expressed as argv, script body, file upload/download, WSL program, scheduled-task query, or PowerShell file/stdin, use the native/MCP path. Avoid raw `cmd.exe`, raw `powershell.exe`, `wsl.exe ... bash -lc ...`, or hand-built Windows command strings in agent work.
 
 The intended steady state is:
 
 - direct native process launch, staged `scp`, and a native C# Windows executor for routine work
-- a single structured `invoke-b64` envelope instead of quote-sensitive command strings
+- a single structured `invoke-b64` envelope, or V3 `rpc-stdio` stdin JSON, instead of quote-sensitive command strings
 - PowerShell or cmd script control only through the wrapper's staged exec bridge
 - SSH bound to a private address by default, with an on-host guard that disables `sshd` if exposure drifts
 
@@ -199,7 +199,38 @@ gh release download vX.Y.Z -p 'windows-remote-executor-native-vX.Y.Z-fdd-win-x64
 ./windows-remote-executor/bin/win-remote update-tools winbox --native-zip /tmp/wre-release/windows-remote-executor-native-vX.Y.Z-fdd-win-x64.zip
 ```
 
+For V3 rollout, deploy the release asset with existing V2 `update-tools`, then run both matrices before changing defaults:
+
+```bash
+./windows-remote-executor/scripts/verify-v3-remote-cases.sh winbox
+./windows-remote-executor/scripts/verify-remote-cases.sh winbox
+```
+
 Local publish directories are for development verification only. Production remote executor updates must use GitHub release assets.
+
+Create a desktop/admin bootstrap package for a new Windows machine from a release asset. For a brand-new machine that may not have the .NET 8 runtime, prefer the self-contained `scd-win-x64` asset; it bundles the runtime so the native executor runs without a separate .NET install:
+
+```bash
+./windows-remote-executor/scripts/make-bootstrap-package.sh \
+  --native-zip /tmp/wre-release/windows-remote-executor-native-vX.Y.Z-scd-win-x64.zip \
+  --public-key ~/.ssh/id_ed25519.pub \
+  --target-name winbox-new \
+  --generate-token
+```
+
+The framework-dependent `fdd-win-x64` asset is also accepted, but the target must already have the .NET 8 runtime installed:
+
+```bash
+./windows-remote-executor/scripts/make-bootstrap-package.sh \
+  --native-zip /tmp/wre-release/windows-remote-executor-native-vX.Y.Z-fdd-win-x64.zip \
+  --public-key ~/.ssh/id_ed25519.pub \
+  --target-name winbox-new \
+  --generate-token
+```
+
+Copy the generated zip to the Windows desktop, extract it, open elevated PowerShell, and run the included `install-wre-new-host.ps1`. The installer writes a `target-*.env` template for the controller.
+
+Note: this `scd` preference applies only to the new-host bootstrap package. X570 `update-tools` still uses the `fdd-win-x64` asset.
 
 Inspect scheduled tasks without hand-writing PowerShell quoting:
 

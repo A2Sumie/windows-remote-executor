@@ -25,10 +25,18 @@ That means the model calls a tool like `win_run` instead of generating:
 
 This removes day-to-day quoting drift from the model layer. The C# native executor owns process launch and structured argv handling; MCP owns JSON-shaped tool calls; the Python wrapper turns those calls into one `invoke-b64` envelope when the target supports it and uses `win-remote-legacy` only for compatibility with older deployed targets.
 
+V3 adds an experimental direct `rpc-stdio` transport for `win_probe`, `win_capture`, and `win_exec_capture`. It keeps the SSH command fixed as `WindowsRemoteExecutor.Native.exe rpc-stdio` and sends user payload as one JSON request on stdin. Leave MCP on the legacy/V2 path unless `WIN_REMOTE_MCP_TRANSPORT=v3` is set and the target has passed the V3 matrix.
+
 ## Run
 
 ```bash
 python3 ./windows-remote-executor/mcp/win_remote_mcp.py
+```
+
+Run the experimental V3 transport only after deploying a native executor that advertises `rpc-stdio`:
+
+```bash
+WIN_REMOTE_MCP_TRANSPORT=v3 python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 ```
 
 ## Exposed tools
@@ -60,6 +68,7 @@ python3 ./windows-remote-executor/mcp/win_remote_mcp.py
 - Raw `powershell.exe` / `pwsh` through those argv routes hits the default guard unless the caller explicitly enables the wrapper escape hatch.
 - If PowerShell or cmd script control is the lower-error route, use `win_exec` / `win_exec_capture`; the PowerShell-specific tools remain compatibility aliases.
 - The wrapper checks target native support before using `invoke-b64`. Older targets fall back to `win-remote-legacy` until updated from a GitHub release asset.
+- With `WIN_REMOTE_MCP_TRANSPORT=v3`, `win_probe`, `win_capture`, and `win_exec_capture` call the Python V3 client directly instead of shelling out to `win-remote`. Other tools remain on the legacy/V2 wrapper path.
 - Remote Windows paths should be passed with forward slashes or as quoted backslash strings. Drive-relative shapes such as `D:folderfile.py` are rejected before remote execution.
 
 ## WSL stance

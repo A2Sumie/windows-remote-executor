@@ -35,6 +35,12 @@ internal static class Program
                 return 0;
             }
 
+            if (command == "rpc-selftest")
+            {
+                Console.WriteLine(RpcServer.BuildSelfTestJson());
+                return 0;
+            }
+
             if (!OperatingSystem.IsWindows())
             {
                 Console.Error.WriteLine("This executable only runs on Windows. Use selftest for cross-platform envelope validation.");
@@ -43,6 +49,9 @@ internal static class Program
 
             switch (command)
             {
+                case "rpc-stdio":
+                    return await RpcServer.RunStdioAsync();
+
                 case "bootstrap":
                 case "bootstrap-x570":
                     var bootstrapOptions = BootstrapOptions.FromArgs(commandArgs);
@@ -168,6 +177,8 @@ internal static class Program
               WindowsRemoteExecutor.Native.exe repair-sshd [options]
               WindowsRemoteExecutor.Native.exe probe
               WindowsRemoteExecutor.Native.exe selftest
+              WindowsRemoteExecutor.Native.exe rpc-selftest
+              WindowsRemoteExecutor.Native.exe rpc-stdio
               WindowsRemoteExecutor.Native.exe invoke-b64 <base64url-json-envelope>
               WindowsRemoteExecutor.Native.exe run-b64 [options]
               WindowsRemoteExecutor.Native.exe capture-b64 [options]
@@ -303,6 +314,11 @@ internal static class Program
 
             security option:
               --access-token <base64-utf8-token>
+
+            rpc-stdio request:
+              One UTF-8 JSON object on stdin. The response is one UTF-8 JSON object
+              on stdout. Supported actions: host.capabilities, host.probe,
+              process.capture, script.capture, file.writeText, file.readText.
 
             invoke-b64 envelope:
               A base64url UTF-8 JSON object with an action such as process.run,
