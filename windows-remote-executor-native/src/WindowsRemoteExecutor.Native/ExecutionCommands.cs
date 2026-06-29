@@ -703,14 +703,6 @@ internal static class ExecutionCommands
         return 0;
     }
 
-    public static int SpawnDirectCommand(string[] args)
-    {
-        var options = SpawnProcessOptions.FromBase64Args(args);
-        var result = WindowsProcessSpawner.SpawnDirect(options);
-        Console.WriteLine(JsonSerializer.Serialize(result));
-        return 0;
-    }
-
     public static async Task<int> RunPythonAsync(string[] args)
     {
         var options = PythonScriptOptions.FromBase64Args(args);
@@ -1715,25 +1707,8 @@ internal static class WindowsProcessSpawner
     private const int StdErrorHandle = -12;
     private const ushort SwHide = 0;
 
-    public static SpawnProcessResult Spawn(SpawnProcessOptions options)
-    {
-        var stdoutPath = string.IsNullOrWhiteSpace(options.StdOutPath) ? "NUL" : options.StdOutPath!;
-        var stderrPath = string.IsNullOrWhiteSpace(options.StdErrPath) ? stdoutPath : options.StdErrPath!;
-        var taskName = $"WinRemoteSpawn-{Guid.NewGuid():N}";
-        var scriptPath = WriteScheduledSpawnScript(options, taskName);
-
-        CreateScheduledTask(taskName, scriptPath);
-        RunScheduledTask(taskName);
-
-        return new SpawnProcessResult(
-            0,
-            options.FilePath,
-            options.Arguments,
-            options.WorkingDirectory,
-            stdoutPath,
-            stderrPath,
-            DateTimeOffset.UtcNow.ToString("O"));
-    }
+    public static SpawnProcessResult Spawn(SpawnProcessOptions options) =>
+        SpawnDirect(options);
 
     public static SpawnProcessResult SpawnDirect(SpawnProcessOptions options)
     {
@@ -1796,90 +1771,6 @@ internal static class WindowsProcessSpawner
             stdoutPath,
             stderrPath,
             DateTimeOffset.UtcNow.ToString("O"));
-    }
-
-    private static string WriteScheduledSpawnScript(SpawnProcessOptions options, string taskName)
-    {
-        var baseDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "WindowsRemoteExecutor",
-            "spawn");
-        Directory.CreateDirectory(baseDirectory);
-        var scriptPath = Path.Combine(baseDirectory, $"{taskName}.cmd");
-        var logPath = Path.Combine(baseDirectory, $"{taskName}.log");
-        var processPath = Environment.ProcessPath
-            ?? throw new InvalidOperationException("Environment.ProcessPath is unavailable.");
-        var command = BuildCommandLine(processPath, BuildSpawnDirectArguments(options));
-
-        var builder = new StringBuilder();
-        builder.AppendLine("@echo off");
-        builder.AppendLine("setlocal");
-        builder.AppendLine($"{command} 1>>{QuoteWindowsArgument(logPath)} 2>>&1");
-        builder.AppendLine($"schtasks.exe /Delete /TN {QuoteWindowsArgument(taskName)} /F >NUL 2>NUL");
-        builder.AppendLine("del \"%~f0\" >NUL 2>NUL");
-        File.WriteAllText(scriptPath, builder.ToString(), Encoding.ASCII);
-        return scriptPath;
-    }
-
-    private static IReadOnlyList<string> BuildSpawnDirectArguments(SpawnProcessOptions options)
-    {
-        var args = new List<string>
-        {
-            "spawn-direct-b64",
-            "--file",
-            Base64Args.Encode(options.FilePath)
-        };
-        if (!string.IsNullOrWhiteSpace(options.WorkingDirectory))
-        {
-            args.Add("--cwd");
-            args.Add(Base64Args.Encode(options.WorkingDirectory!));
-        }
-        if (!string.IsNullOrWhiteSpace(options.StdOutPath))
-        {
-            args.Add("--stdout");
-            args.Add(Base64Args.Encode(options.StdOutPath!));
-        }
-        if (!string.IsNullOrWhiteSpace(options.StdErrPath))
-        {
-            args.Add("--stderr");
-            args.Add(Base64Args.Encode(options.StdErrPath!));
-        }
-        foreach (var argument in options.Arguments)
-        {
-            args.Add("--arg");
-            args.Add(Base64Args.Encode(argument));
-        }
-        return args;
-    }
-
-    private static void CreateScheduledTask(string taskName, string scriptPath)
-    {
-        var runAt = DateTime.Now.AddMinutes(5).ToString("HH:mm");
-        RunToolOrThrow("schtasks.exe", new[]
-        {
-            "/Create",
-            "/F",
-            "/SC",
-            "ONCE",
-            "/ST",
-            runAt,
-            "/TN",
-            taskName,
-            "/TR",
-            $"cmd.exe /d /s /c {QuoteWindowsArgument(scriptPath)}"
-        });
-    }
-
-    private static void RunScheduledTask(string taskName)
-    {
-        RunToolOrThrow("schtasks.exe", new[] { "/Run", "/TN", taskName });
-    }
-
-    private static void RunToolOrThrow(string filePath, IReadOnlyList<string> arguments)
-    {
-        ProcessRunner.RunAsync(filePath, arguments, throwOnFailure: true)
-            .GetAwaiter()
-            .GetResult();
     }
 
     private static SafeFileHandle OpenInheritableHandle(string path, uint access, uint creationDisposition, bool append)
