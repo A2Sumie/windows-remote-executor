@@ -2,11 +2,23 @@
 
 No `schtasks.exe`, no PowerShell. Pure IDispatch through pywin32 (already
 shipped in the embeddable Python, see make_bootstrap_package.py).
+
+v4-hardening backports (2026-08-25, from v5; 2026-08-18 v4 audit, section C):
+- ExecAction.Arguments are composed with `subprocess.list2cmdline` (proper
+  Windows quoting) instead of a bare `" ".join(args)`.
+- Task names are validated: `\\/:*?"<>|` and control characters rejected,
+  length capped at 200.
+- `update_task` is a read-modify-write: fields absent from the spec keep
+  their existing definition values (triggers, principal, settings, and any
+  action field not being changed). If the existing definition cannot be read,
+  it degrades to a full rebuild and reports `partial: false`.
 """
 
 from __future__ import annotations
 
 import os
+import re
+import subprocess
 from typing import Any
 
 
@@ -54,6 +66,23 @@ TRIGGER_NAME_TO_ID = {
 
 TRIGGER_KINDS = tuple(TRIGGER_NAME_TO_ID.keys())
 
+# Windows forbids these in task names; control characters are equally invalid.
+_TASK_NAME_BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+_TASK_NAME_MAX = 200
+
+
+def _validate_task_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("task name is required")
+    if len(name) > _TASK_NAME_MAX:
+        raise ValueError(f"task name exceeds {_TASK_NAME_MAX} characters")
+    if _TASK_NAME_BAD.search(name):
+        raise ValueError(
+            'task name contains characters invalid on Windows: \\/:*?"<>| or control characters'
+        )
+    return name
+
 
 def _win_path(value: str) -> str:
     if not value:
@@ -65,6 +94,12 @@ def _win_path(value: str) -> str:
 
 def _win_args(args: list[str]) -> list[str]:
     return [_win_path(str(arg)) for arg in args]
+
+
+def _join_args(args: list[str]) -> str:
+    """Compose the TaskScheduler ExecAction.Arguments string with real Windows
+    argv quoting (msvcrt rules), so args containing spaces or quotes survive."""
+    return subprocess.list2cmdline(args)
 
 
 def _import_disp():  # type: ignore[no-untyped-def]
@@ -114,6 +149,7 @@ def list_repair_tasks(task_names: tuple[str, ...]) -> list[dict[str, Any]]:
 
 def detail_task(name: str) -> dict[str, Any]:
     try:
+        _validate_task_name(name)
         ts = _connect_task_service()
         folder = _root_folder(ts)
         task = folder.GetTask(name)
@@ -125,6 +161,7 @@ def detail_task(name: str) -> dict[str, Any]:
 def run_task(name: str) -> dict[str, Any]:
     """Trigger IRegisteredTask.Run with no parameters."""
     try:
+        _validate_task_name(name)
         ts = _connect_task_service()
         folder = _root_folder(ts)
         task = folder.GetTask(name)
@@ -148,7 +185,7 @@ def create_task(spec: dict[str, Any]) -> dict[str, Any]:
     `spec`:
       name (required)
       exe  (required) — Windows path, e.g. C:/Windows/System32/cmd.exe
-      args (list[str]) — argv joined as TaskScheduler ExecAction.Arguments
+      args (list[str]) — argv joined via subprocess.list2cmdline
       cwd (string)
       trigger (manual|logon|startup|boot|interval; default manual)
       trigger_params (dict, e.g. {"delay":"PT30S","repetitionMinutes":10})
@@ -160,9 +197,7 @@ def create_task(spec: dict[str, Any]) -> dict[str, Any]:
       enabled (bool; default True)
       description (str; defaults to name)
     """
-    name = str(spec.get("name") or "").strip()
-    if not name:
-        raise ValueError("host.task.create requires payload.name")
+    name = _validate_task_name(str(spec.get("name") or ""))
     exe = spec.get("exe")
     if not exe:
         raise ValueError("host.task.create requires payload.exe")
@@ -179,67 +214,18 @@ def create_task(spec: dict[str, Any]) -> dict[str, Any]:
     enabled = bool(spec.get("enabled", True))
     description = spec.get("description") or name
 
-    if run_as_user.lower() == "system":
-        logon_type = TASK_LOGON_SERVICE_ACCOUNT
-        register_user = "SYSTEM"
-        register_password = None
-        register_logon_flag = TASK_LOGON_SERVICE_ACCOUNT
-    elif run_as_user == "":
-        # Implicit "current SSH/logon user" — pick S4U (no password needed;
-        # works in non-elevated SSH sessions). RegisterTaskDefinition with S4U
-        # requires an explicit DOMAIN\USER, otherwise it returns
-        # ERROR_LOGON_FAILURE (0x8007052E masked as DISP_E_EXCEPTION).
-        logon_type = int(spec.get("logon_type", TASK_LOGON_DEFAULT_CURRENT_USER))
-        register_user = _current_full_user_name()
-        register_password = None
-        register_logon_flag = TASK_LOGON_DEFAULT_CURRENT_USER
-    else:
-        # Explicit user without password: use S4U by default. INTERACTIVE_TOKEN
-        # requires an already-available interactive desktop token and fails when
-        # the SYSTEM apply-agent registers tasks on behalf of that user.
-        logon_type = int(spec.get("logon_type", TASK_LOGON_S4U))
-        register_user = run_as_user
-        register_password = None
-        register_logon_flag = logon_type
+    register_user, register_password, register_logon_flag, logon_type = _register_credentials(
+        spec, run_as_user
+    )
 
     ts = _connect_task_service()
     folder = _root_folder(ts)
     definition = ts.NewTask(TASK_FLAG_DEFAULT)
     definition.RegistrationInfo.Description = description
-    # Action
-    action = definition.Actions.Create(TASK_ACTION_EXEC)
-    action.Path = exe
-    action.Arguments = " ".join(args)
-    if cwd:
-        action.WorkingDirectory = cwd
-
-    # Trigger (manual = no trigger; just registered as runnable)
-    if trigger_kind != "manual":
-        trigger_id = TRIGGER_NAME_TO_ID[trigger_kind]
-        trigger = definition.Triggers.Create(trigger_id)
-        if delay_iso:
-            try:
-                trigger.Delay = delay_iso
-            except Exception:  # noqa: BLE001
-                pass
-        if interval_minutes:
-            try:
-                trigger.Repetition.Interval = f"PT{int(interval_minutes)}M"
-            except Exception:  # noqa: BLE001
-                pass
-
-    # Principal
-    principal = definition.Principal
-    if run_as_user:
-        principal.UserId = run_as_user
-    principal.LogonType = logon_type
-    principal.RunLevel = run_level
-
-    # Settings
-    definition.Settings.Enabled = enabled
-    definition.Settings.StartWhenAvailable = True
-    definition.Settings.StopIfGoingOnBatteries = False
-    definition.Settings.DisallowStartIfOnBatteries = False
+    _set_exec_action(definition, exe, args, cwd)
+    _set_trigger(definition, trigger_kind, delay_iso, interval_minutes)
+    _set_principal(definition, run_as_user, logon_type, run_level)
+    _apply_settings(definition, enabled)
 
     # TASK_CREATE_OR_UPDATE overwrites safely. Do NOT delete first: if Windows
     # rejects the new principal (common for user tasks from a SYSTEM apply-agent),
@@ -259,14 +245,163 @@ def create_task(spec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _register_credentials(spec: dict[str, Any], run_as_user: str):  # type: ignore[no-untyped-def]
+    """Pick (register_user, register_password, register_logon_flag, logon_type)
+    for RegisterTaskDefinition based on the resolved run_as_user."""
+    if run_as_user.lower() == "system":
+        return "SYSTEM", None, TASK_LOGON_SERVICE_ACCOUNT, TASK_LOGON_SERVICE_ACCOUNT
+    if run_as_user == "":
+        # Implicit "current SSH/logon user" — pick S4U (no password needed;
+        # works in non-elevated SSH sessions). RegisterTaskDefinition with S4U
+        # requires an explicit DOMAIN\USER, otherwise it returns
+        # ERROR_LOGON_FAILURE (0x8007052E masked as DISP_E_EXCEPTION).
+        logon_type = int(spec.get("logon_type", TASK_LOGON_DEFAULT_CURRENT_USER))
+        return _current_full_user_name(), None, TASK_LOGON_DEFAULT_CURRENT_USER, logon_type
+    # Explicit user without password: use S4U by default. INTERACTIVE_TOKEN
+    # requires an already-available interactive desktop token and fails when
+    # the SYSTEM apply-agent registers tasks on behalf of that user.
+    logon_type = int(spec.get("logon_type", TASK_LOGON_S4U))
+    return run_as_user, None, logon_type, logon_type
+
+
+def _set_exec_action(definition, exe: str, args: list[str], cwd: str) -> None:  # type: ignore[no-untyped-def]
+    action = definition.Actions.Create(TASK_ACTION_EXEC)
+    action.Path = exe
+    action.Arguments = _join_args(args)
+    if cwd:
+        action.WorkingDirectory = cwd
+
+
+def _set_trigger(definition, trigger_kind: str, delay_iso: str | None, interval_minutes: Any) -> None:  # type: ignore[no-untyped-def]
+    # manual = no trigger; just registered as runnable.
+    if trigger_kind == "manual":
+        return
+    trigger_id = TRIGGER_NAME_TO_ID[trigger_kind]
+    trigger = definition.Triggers.Create(trigger_id)
+    if delay_iso:
+        try:
+            trigger.Delay = delay_iso
+        except Exception:  # noqa: BLE001
+            pass
+    if interval_minutes:
+        try:
+            trigger.Repetition.Interval = f"PT{int(interval_minutes)}M"
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _set_principal(definition, run_as_user: str, logon_type: int, run_level: int) -> None:  # type: ignore[no-untyped-def]
+    principal = definition.Principal
+    if run_as_user:
+        principal.UserId = run_as_user
+    principal.LogonType = logon_type
+    principal.RunLevel = run_level
+
+
+def _apply_settings(definition, enabled: bool) -> None:  # type: ignore[no-untyped-def]
+    definition.Settings.Enabled = enabled
+    definition.Settings.StartWhenAvailable = True
+    definition.Settings.StopIfGoingOnBatteries = False
+    definition.Settings.DisallowStartIfOnBatteries = False
+
+
 def update_task(spec: dict[str, Any]) -> dict[str, Any]:
-    result = create_task(spec)
-    result["updated"] = True
-    return result
+    """Read-modify-write update.
+
+    Only fields present in `spec` are changed; everything else (triggers,
+    principal, settings, untouched action fields) keeps the existing
+    definition's values. When the existing definition cannot be read, this
+    degrades to a full rebuild from the spec and reports `partial: False`.
+    """
+    name = _validate_task_name(str(spec.get("name") or ""))
+
+    try:
+        ts = _connect_task_service()
+        folder = _root_folder(ts)
+        task = folder.GetTask(name)
+        definition = task.Definition
+    except Exception as exc:  # noqa: BLE001
+        # Existing definition unreadable -> full rebuild from spec alone.
+        # Fields not in the spec are LOST; flag that with partial=False.
+        result = create_task(spec)
+        result["updated"] = True
+        result["partial"] = False
+        result["note"] = f"existing task unreadable ({exc}); rebuilt from spec only"
+        return result
+
+    changed: list[str] = []
+
+    if any(k in spec for k in ("exe", "args", "cwd")):
+        actions = definition.Actions
+        if int(actions.Count) >= 1:
+            action = actions.Item(1)
+            if "exe" in spec:
+                action.Path = _win_path(str(spec["exe"]))
+                changed.append("exe")
+            if "args" in spec:
+                action.Arguments = _join_args(_win_args(list(spec.get("args") or [])))
+                changed.append("args")
+            if "cwd" in spec:
+                cwd = _win_path(str(spec.get("cwd") or ""))
+                if cwd:
+                    action.WorkingDirectory = cwd
+                changed.append("cwd")
+        else:
+            raise ValueError(f"task {name!r} has no existing action to update")
+
+    if "trigger" in spec:
+        trigger_kind = (spec.get("trigger") or "manual").lower()
+        if trigger_kind not in TRIGGER_KINDS:
+            raise ValueError(f"trigger must be one of {TRIGGER_KINDS}, got {trigger_kind}")
+        # ITriggerCollection.Clear() drops every existing trigger before the
+        # replacement is created — an explicit spec field, so this is intended.
+        definition.Triggers.Clear()
+        _set_trigger(definition, trigger_kind,
+                     spec.get("delay_iso") or spec.get("delay"),
+                     spec.get("interval_minutes"))
+        changed.append("trigger")
+
+    if "enabled" in spec:
+        definition.Settings.Enabled = bool(spec["enabled"])
+        changed.append("enabled")
+
+    if "description" in spec:
+        definition.RegistrationInfo.Description = str(spec["description"])
+        changed.append("description")
+
+    if any(k in spec for k in ("run_as_user", "run_level", "logon_type")):
+        principal = definition.Principal
+        if "run_as_user" in spec:
+            principal.UserId = resolve_run_as_user(spec.get("run_as_user") or "SYSTEM")
+            changed.append("run_as_user")
+        if "run_level" in spec:
+            principal.RunLevel = int(spec["run_level"])
+            changed.append("run_level")
+        if "logon_type" in spec:
+            principal.LogonType = int(spec["logon_type"])
+            changed.append("logon_type")
+
+    # Re-register with the definition's (possibly just-updated) principal so
+    # the stored identity is preserved unless the spec asked to change it.
+    principal = definition.Principal
+    re_register_user = str(getattr(principal, "UserId", "") or "") or None
+    re_register_logon = int(getattr(principal, "LogonType", TASK_LOGON_S4U) or TASK_LOGON_S4U)
+
+    folder.RegisterTaskDefinition(
+        name, definition, TASK_CREATE_OR_UPDATE,
+        re_register_user, None, re_register_logon, None,
+    )
+    return {
+        "name": name,
+        "updated": True,
+        "partial": True,
+        "changed": changed,
+    }
 
 
 def delete_task(name: str) -> dict[str, Any]:
     try:
+        _validate_task_name(name)
         ts = _connect_task_service()
         folder = _root_folder(ts)
         _try_delete(folder, name)

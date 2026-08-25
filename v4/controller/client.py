@@ -22,6 +22,11 @@ from .targets import Target
 
 REMOTE_COMMAND = 'cmd.exe /d /s /c "C:/CodexRemote/wre/python/python.exe -I -X utf8 C:/CodexRemote/wre/rpc.py rpc-stdio"'
 
+# A caller that passes no timeout used to get NO transport deadline at all —
+# a hung ssh or native process suspended call() forever (v4 audit A6;
+# backported 2026-08-25 from v6/controller/client.py H9).
+DEFAULT_TRANSPORT_TIMEOUT_S = 600
+
 
 class RpcError(Exception):
     pass
@@ -158,7 +163,11 @@ def parse_response(stdout: str, stderr: str, returncode: int) -> dict[str, Any]:
     raise RpcProtocolError(f"rpc-stdio did not return JSON: {detail}")
 
 
-def _transport_timeout(timeout_seconds: int | None) -> int | None:
+def _transport_timeout(timeout_seconds: int | None) -> int:
+    """Transport deadline for the ssh subprocess. An explicit action timeout
+    gets +30 s of ssh/native overhead headroom; no timeout at all still gets
+    the DEFAULT_TRANSPORT_TIMEOUT_S backstop so call() can never hang
+    indefinitely."""
     if not timeout_seconds:
-        return None
+        return DEFAULT_TRANSPORT_TIMEOUT_S
     return timeout_seconds + 30

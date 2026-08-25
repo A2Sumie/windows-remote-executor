@@ -6,6 +6,16 @@ Runs on the Windows host. Invoked as:
 
 Reads one UTF-8 JSON request line on stdin, writes one UTF-8 JSON
 response line on stdout. See V4.md for the protocol contract.
+
+v4-hardening backports (2026-08-25, branch v4-hardening; protocolVersion
+stays 4, action list and wire format unchanged):
+- Fail-closed auth in win32/access_policy.py (from v5; audit finding A1).
+- Best-effort per-request audit log at C:/CodexRemote/logs/rpc-audit.log
+  (from v5; audit finding A6), WITH 20 MB size rotation keeping one `.1`
+  generation (from v6/native/auditlog.py H12) — the log is rotated from the
+  day it is introduced, and the same rotation now covers wre-apply.log and
+  the sshd guard/repair logs, which previously grew without bound.
+- Bounded request line (16 MB) instead of an unbounded readline() (from v5).
 """
 
 from __future__ import annotations
@@ -21,6 +31,15 @@ from typing import Any, Callable
 
 PROTOCOL_VERSION = 4
 ACTIONS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {}
+
+# putBinary allows 4 MB of raw bytes -> ~5.6 MB of base64; 16 MB leaves ample
+# headroom while still bounding memory per one-shot rpc process.
+MAX_REQUEST_LINE_BYTES = 16 * 1024 * 1024
+
+AUDIT_LOG_PATH = "C:/CodexRemote/logs/rpc-audit.log"
+# Rotation (from v6/native/auditlog.py): size-based, one previous generation
+# kept as `<log>.1`, gzip-free for tail-ability.
+LOG_ROTATE_BYTES = 20 * 1024 * 1024
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, THIS_DIR)
@@ -105,13 +124,64 @@ def _host_capabilities(_payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def dispatch(request: dict[str, Any]) -> dict[str, Any]:
+    start_perf = time.perf_counter()
+    response = _dispatch_inner(request)
+    duration_ms = int((time.perf_counter() - start_perf) * 1000)
+    response["durationMs"] = duration_ms
+    _audit(request, response, duration_ms)
+    return response
+
+
+def _rotate_if_large(path: str, limit: int = LOG_ROTATE_BYTES) -> None:
+    """Size-based rotation: path -> path.1 (previous .1 is dropped)."""
+    try:
+        if os.path.getsize(path) > limit:
+            prev = path + ".1"
+            if os.path.exists(prev):
+                os.remove(prev)
+            os.replace(path, prev)
+    except OSError:
+        pass
+
+
+def _write_audit(entry: dict[str, Any]) -> None:
+    """Best-effort JSONL audit of every dispatched request.
+
+    Never blocks the RPC path: any failure is swallowed. Windows-only — local
+    macOS/Linux selftests and loopback runs skip the log entirely (the audit
+    path is a host filesystem location). Rotated at 20 MB (see
+    _rotate_if_large).
+    """
+    if os.name != "nt":
+        return
+    try:
+        os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
+        _rotate_if_large(AUDIT_LOG_PATH)
+        line = json.dumps(entry, ensure_ascii=False, separators=(",", ":"))
+        with open(AUDIT_LOG_PATH, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+
+
+def _audit(request: dict[str, Any], response: dict[str, Any], duration_ms: int) -> None:
+    _write_audit({
+        "ts": _now_iso(),
+        "id": response.get("id") or str(request.get("id") or ""),
+        "action": str(request.get("action") or ""),
+        "ok": bool(response.get("ok")),
+        "errorClass": str(response.get("errorClass") or ""),
+        "durationMs": duration_ms,
+    })
+
+
+def _dispatch_inner(request: dict[str, Any]) -> dict[str, Any]:
     request_id = str(request.get("id") or f"rpc-{uuid.uuid4().hex}")
     action = str(request.get("action") or "").strip()
     payload = request.get("payload") or {}
     access_token = request.get("accessToken")
     timeout_seconds = request.get("timeoutSeconds")
     started = _now_iso()
-    start_perf = time.perf_counter()
 
     if not action:
         return _err_response(request_id, "request", "missing action")
@@ -155,7 +225,6 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
         )
 
     ended = _now_iso()
-    duration_ms = int((time.perf_counter() - start_perf) * 1000)
     response = _build_response(
         request_id,
         True,
@@ -166,7 +235,6 @@ def dispatch(request: dict[str, Any]) -> dict[str, Any]:
         ended_at=ended,
         evidence=[action] + result.get("evidence_extra", []),
     )
-    response["durationMs"] = duration_ms
     return response
 
 
@@ -228,7 +296,7 @@ def _run_apply_tasks(argv: list[str]) -> int:
         if os.path.isfile(spec_path):
             with open(spec_path, "r", encoding="utf-8-sig") as fh:
                 spec = json.load(fh)
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, ValueError) as exc:  # ValueError covers JSONDecodeError
         sys.stderr.write(f"apply-tasks: cannot read spec {spec_path}: {exc}\n")
 
     expected_listen = spec.get("expectedListenAddress") or expected_listen
@@ -273,18 +341,24 @@ def _run_apply_tasks(argv: list[str]) -> int:
     line = json.dumps(results, ensure_ascii=False)
     try:
         os.makedirs("C:/CodexRemote/logs", exist_ok=True)
+        _rotate_if_large("C:/CodexRemote/logs/wre-apply.log")
         with open("C:/CodexRemote/logs/wre-apply.log", "a", encoding="utf-8", newline="\n") as fh:
             fh.write(line + "\n")
-    except Exception as exc:
+    except OSError as exc:
         sys.stderr.write(f"apply-tasks: cannot write log: {exc}\n")
     sys.stderr.write(line + "\n")
     return exit_code
 
 
 def _read_request_line() -> dict[str, Any]:
-    raw = sys.stdin.readline()
+    raw = sys.stdin.readline(MAX_REQUEST_LINE_BYTES + 1)
     if not raw:
         return {}
+    if len(raw) > MAX_REQUEST_LINE_BYTES:
+        raise ValueError(
+            f"request line exceeds {MAX_REQUEST_LINE_BYTES} bytes; "
+            "split the payload (SFTP for large files)"
+        )
     text = raw.lstrip("\ufeff").strip()
     if not text:
         return {}
@@ -347,6 +421,9 @@ def main() -> int:
         request = _read_request_line()
     except json.JSONDecodeError as exc:
         _write_response_line(_err_response("malformed", "protocol", f"bad json: {exc}"))
+        return 0
+    except ValueError as exc:
+        _write_response_line(_err_response("malformed", "protocol", str(exc)))
         return 0
     if not request:
         _write_response_line(_err_response("empty", "protocol", "empty stdin"))

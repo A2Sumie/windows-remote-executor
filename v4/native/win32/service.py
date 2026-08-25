@@ -2,12 +2,25 @@
 
 Hard dependency on pywin32 on the Windows host. Wrapped so that probe paths
 that only read state do not crash if the import is unavailable.
+
+v4-hardening (backported 2026-08-25 from v5): service names are validated
+against a whitelist before being interpolated into the WQL query (defense in
+depth; current callers only pass constants).
 """
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
+
+_SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9_ -]+$")
+
+
+def _validate_service_name(name: str) -> str:
+    if not _SERVICE_NAME_RE.match(name or ""):
+        raise ValueError(f"invalid service name: {name!r}")
+    return name
 
 
 def _import_win32serviceutil():  # type: ignore[no-untyped-def]
@@ -18,6 +31,7 @@ def _import_win32serviceutil():  # type: ignore[no-untyped-def]
 
 def service_state_safe(name: str) -> dict[str, Any]:
     try:
+        _validate_service_name(name)
         win32serviceutil, win32service = _import_win32serviceutil()
         from win32com.client import GetObject  # type: ignore
         wmi = GetObject(r"winmgmts:root\cimv2")
@@ -36,6 +50,7 @@ def service_state_safe(name: str) -> dict[str, Any]:
 
 
 def restart_service_safe(name: str, timeout_seconds: int = 20) -> dict[str, Any]:
+    _validate_service_name(name)
     try:
         win32serviceutil, win32service = _import_win32serviceutil()
         win32serviceutil.StopService(name)
@@ -54,6 +69,7 @@ def restart_service_safe(name: str, timeout_seconds: int = 20) -> dict[str, Any]
 
 def set_service_start_mode_safe(name: str, mode: str) -> dict[str, Any]:
     """Set start mode: 'auto' | 'demand' | 'disabled'."""
+    _validate_service_name(name)
     try:
         win32serviceutil, win32service = _import_win32serviceutil()
         desired = {

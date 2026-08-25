@@ -1,8 +1,19 @@
-"""Host actions: probe, guard, repair, policy, tasks.list, tasks.detail.
+"""Host actions: probe, guard, repair, policy, tasks.*.
 
 Pure Python: stdlib + pywin32 (for service config / sshd restart) + comtypes
 (for TaskScheduler COM). No PowerShell, no argv to schtasks.exe / netsh.exe /
 sc.exe. Firewall rules are read via HNetCfg.FwPolicy2 COM.
+
+v4-hardening backports (2026-08-25, from v5/v6):
+- host.repair restarts sshd only when the config was actually rewritten or
+  the service is not Running (the old v4 unconditional restart made the
+  10-minute repair watch kill long-lived SSH sessions for no reason).
+- _uptime_hours uses kernel32 GetTickCount64 via ctypes (v6, commit 9ec7b75):
+  pywin32 has no win32api.GetTickCount64, so the old code's bare except made
+  uptimeHours silently report 0.0 forever.
+- host.probe policy category reports policyStatus (ok/missing/corrupt) from
+  the fail-closed access_policy backport; sshd category uses the real
+  iphlpapi listener enumeration (see win32/sshd.py).
 """
 
 from __future__ import annotations
@@ -10,8 +21,6 @@ from __future__ import annotations
 import getpass
 import os
 import platform
-import re
-import shutil
 import socket
 import sys
 import time
@@ -59,7 +68,8 @@ def _probe(payload: dict[str, Any]) -> dict[str, Any]:
     if "sshd" in categories:
         data["sshd"] = _probe_sshd()
     if "policy" in categories:
-        data["policy"] = ap.load_policy() or {"label": "UNCONFIGURED"}
+        policy, status = ap.read_policy()
+        data["policy"] = {**(policy or {"label": "UNCONFIGURED"}), "policyStatus": status}
     if "tasks" in categories:
         try:
             data["tasks"] = tasks_mod.list_repair_tasks(REPAIR_TASK_NAMES)
@@ -109,9 +119,12 @@ def _probe_os() -> dict[str, Any]:
 
 def _uptime_hours() -> float:
     try:
-        import win32api  # type: ignore
-        boot = datetime.fromtimestamp(win32api.GetTickCount64() / 1000.0, tz=timezone.utc)
-        return round((datetime.now(tz=timezone.utc) - boot).total_seconds() / 3600.0, 2)
+        # pywin32 exposes only GetTickCount (32-bit, wraps); GetTickCount64
+        # does not exist in pywin32 — use kernel32 via ctypes (the pre-hardening
+        # code silently returned 0.0 forever).
+        import ctypes
+        tick_ms = ctypes.windll.kernel32.GetTickCount64()
+        return round(tick_ms / 1000.0 / 3600.0, 2)
     except Exception:  # noqa: BLE001
         return 0.0
 
@@ -120,38 +133,18 @@ def _probe_sshd() -> dict[str, Any]:
     sshd_state = svc_mod.service_state_safe("sshd")
     tailscale_state = svc_mod.service_state_safe("Tailscale")
     configured = sshd_mod.read_listen_addresses()
-    active = _active_tcp_listeners(22)
+    active = sshd_mod._active_listen_addresses(22)
     return {
         "port": 22,
         "configuredListenAddresses": configured,
-        "activeListenAddresses": active,
+        # None = enumeration unknown (non-Windows / iphlpapi failure).
+        "activeListenAddresses": active if active is not None else [],
+        "activeListenersKnown": active is not None,
         "services": {
             "sshd": sshd_state,
             "Tailscale": tailscale_state,
         },
     }
-
-
-def _active_tcp_listeners(port: int) -> list[str]:
-    """Best-effort enumeration of local IPv4 addresses sshd is plausibly
-    listening on. Probe is informational; host.guard is the authoritative
-    exposure check. Falls back to socket.getaddrinfo to avoid pinning a
-    specific WMI namespace across Windows versions.
-    """
-    addrs: set[str] = set()
-    try:
-        for info in socket.getaddrinfo(None, port, socket.AF_INET,
-                                       socket.SOCK_STREAM, socket.IPPROTO_TCP):
-            addrs.add(info[4][0])
-    except OSError:
-        pass
-    # Include hostname-resolved bound IPs as a stable signal, regardless
-    # of socket.getaddrinfo behavior on the current session.
-    try:
-        addrs.update(socket.gethostbyname_ex(socket.gethostname())[2])
-    except OSError:
-        pass
-    return sorted(addrs)
 
 
 # ---------- host.guard ----------
@@ -178,17 +171,27 @@ def _repair(payload: dict[str, Any]) -> dict[str, Any]:
     log_path = payload.get("logPath") or "C:/CodexRemote/logs/sshd-repair.log"
 
     steps: list[str] = []
+    rewritten = False
     try:
-        sshd_mod.rewrite_config(expected_listen=expected, force=force_rewrite, log_path=log_path)
-        steps.append("sshd_config.rewritten")
+        rewrite_result = sshd_mod.rewrite_config(expected_listen=expected, force=force_rewrite, log_path=log_path)
+        rewritten = bool(rewrite_result.get("rewritten"))
+        steps.append("sshd_config.rewritten" if rewritten else "sshd_config.unchanged")
     except Exception as exc:  # noqa: BLE001
         steps.append(f"sshd_config.error:{exc}")
 
-    try:
-        svc_mod.restart_service_safe("sshd")
-        steps.append("sshd.restarted")
-    except Exception as exc:  # noqa: BLE001
-        steps.append(f"sshd.restart.skipped:{exc}")
+    # Restart sshd only when there is something to pick up (config rewritten)
+    # or the service is not Running. The pre-hardening unconditional restart
+    # made the 10-minute SYSTEM repair watch drop healthy long-lived SSH
+    # sessions.
+    sshd_state = svc_mod.service_state_safe("sshd").get("state")
+    if rewritten or sshd_state != "Running":
+        result = svc_mod.restart_service_safe("sshd")
+        if result.get("action") == "restarted":
+            steps.append("sshd.restarted")
+        else:
+            steps.append(f"sshd.restart.error:{result.get('error')}")
+    else:
+        steps.append("sshd.restart.skipped:config-unchanged-and-service-running")
 
     try:
         tasks_mod.ensure_repair_tasks(expected_listen=expected)

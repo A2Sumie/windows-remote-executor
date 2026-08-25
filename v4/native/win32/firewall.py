@@ -8,12 +8,16 @@ from __future__ import annotations
 
 from typing import Any
 
+# Tailscale CGNAT range: the WRE-managed inbound rule only accepts traffic
+# from the tailnet. Defense in depth on top of the sshd ListenAddress pin —
+# if either layer drifts, the other still blocks off-tailnet packets.
+_TAILNET_CGNAT = "100.64.0.0/10"
+
 
 def _fw_policy():  # type: ignore[no-untyped-def]
-    import comtypes  # type: ignore
     import comtypes.client  # type: ignore
-    type_lib_guid = "{D8B6E2C7-FC4F-4C2F-8DE3-3B4D6B6E2C7F}"  # placeholder; replaced at runtime
-    # Use dynamic Dispatch via comtypes.client.CreateObject (much simpler than static iface).
+    # Dynamic Dispatch via comtypes.client.CreateObject (much simpler than a
+    # static interface).
     return comtypes.client.CreateObject("HNetCfg.FwPolicy2")
 
 
@@ -43,7 +47,7 @@ def list_sshd_rules() -> list[dict[str, Any]]:
 
 
 def ensure_sshd_firewall_rule() -> dict[str, Any]:
-    """Ensure a private-only inbound rule exists for sshd on port 22."""
+    """Ensure a tailnet-only inbound rule exists for sshd on port 22."""
     try:
         policy = _fw_policy()
         rules = policy.Rules
@@ -52,16 +56,25 @@ def ensure_sshd_firewall_rule() -> dict[str, Any]:
             if str(rule.Name) == target_name:
                 if not rule.Enabled:
                     rule.Enabled = True
+                # Idempotently enforce the tailnet RemoteAddresses scope on the
+                # WRE-managed rule (created by us, so no operator customization
+                # is expected).
+                try:
+                    if str(rule.RemoteAddresses or "") != _TAILNET_CGNAT:
+                        rule.RemoteAddresses = _TAILNET_CGNAT
+                except Exception:  # noqa: BLE001
+                    pass
                 return {"name": target_name, "ensured": True, "existed": True}
         new_rule = _new_rule()
         new_rule.Name = target_name
-        new_rule.Description = "WRE v4 managed inbound rule for OpenSSH on port 22 (private profiles only)."
+        new_rule.Description = "WRE v4 managed inbound rule for OpenSSH on port 22 (tailnet 100.64.0.0/10 only)."
         new_rule.ApplicationName = "%SystemRoot%/System32/OpenSSH/sshd.exe"
         new_rule.Protocol = 6  # TCP
         new_rule.LocalPorts = "22"
+        new_rule.RemoteAddresses = _TAILNET_CGNAT
         new_rule.Direction = 1  # inbound
         new_rule.Enabled = True
-        new_rule.Profiles = 0x7FFFFFFF  # all profiles — we rely on ListenAddress for actual scope
+        new_rule.Profiles = 0x7FFFFFFF  # all profiles; actual scope comes from RemoteAddresses + ListenAddress
         new_rule.Grouping = "WRE"
         rules.Add(new_rule)
         return {"name": target_name, "ensured": True, "existed": False}

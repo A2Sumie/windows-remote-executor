@@ -6,30 +6,34 @@ Layout on a default OpenSSH-on-Windows install:
   user keys:    <user>/.ssh/authorized_keys
 Service name: sshd  (managed by service.py)
 
-Pure stdlib text editing — no schtasks, no sc, no PowerShell.
+Pure stdlib text editing — no schtasks, no sc, no PowerShell. The active
+listener enumeration uses iphlpapi GetExtendedTcpTable via stdlib ctypes
+(Windows-only, executed lazily; off-Windows it reports "unknown").
+
+v4-hardening backports (2026-08-25, from v5; 2026-08-18 v4 audit finding A3):
+- `_active_listen_addresses` is a REAL socket table read, not the old v4
+  getaddrinfo/gethostbyname_ex pseudo-enumeration.
+- Default sshd config (no ListenAddress line = wildcard listener) now judges
+  UNSAFE instead of the old v4 false-negative "safe".
+- Dead code removed: _SAFE_PRIVATE_PREFIXES, _loopback_or_private.
+- Trailing-newline preservation in _rewrite_listen_block fixed (old v4 had the
+  condition inverted).
+- `_append_log` rotates the guard/repair logs at 20 MB (one `.1` generation
+  kept, from v6/native/auditlog.py) — they previously grew without bound.
 """
 
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import socket
+import struct
 from datetime import datetime, timezone
 from typing import Any
 
 _CONFIG_PATH = r"C:/ProgramData/ssh/sshd_config"
-_SAFE_PRIVATE_PREFIXES = ("10.", "100.64.", "100.65.", "100.66.", "100.67.",
-                          "100.68.", "100.69.", "100.70.", "100.71.", "100.72.",
-                          "100.73.", "100.74.", "100.75.", "100.76.", "100.77.",
-                          "100.78.", "100.79.", "100.80.", "100.81.", "100.82.",
-                          "100.83.", "100.84.", "100.85.", "100.86.", "100.87.",
-                          "100.88.", "100.89.", "100.90.", "100.91.", "100.92.",
-                          "100.93.", "100.94.", "100.95.", "100.96.", "100.97.",
-                          "100.98.", "100.99.", "100.10", "100.11", "100.12",
-                          "192.168.")
-_LOOPBACK = ("127.", "::1")
-_LINK_LOCAL = ("169.254.", "fe80:")
+_WILDCARD_ADDRS = ("0.0.0.0", "::", "::0")
+_LINK_LOCAL_PREFIXES = ("169.254.", "fe80:")
 
 
 def read_listen_addresses() -> list[str]:
@@ -97,7 +101,10 @@ def evaluate_exposure(*, expected_listen: str | None, no_disable: bool, log_path
     diagnostics: dict[str, Any] = {
         "expectedListenAddress": expected_listen or "",
         "configuredListenAddresses": configured,
-        "activeListenAddresses": active,
+        # None means "enumeration unavailable (unknown)" — surfaced as [] with
+        # an explicit flag so JSON consumers never mistake it for "no listeners".
+        "activeListenAddresses": active if active is not None else [],
+        "activeListenersKnown": active is not None,
         "exposureSafe": policy_ok,
         "reason": reason,
         "noDisable": no_disable,
@@ -109,40 +116,93 @@ def evaluate_exposure(*, expected_listen: str | None, no_disable: bool, log_path
     return diagnostics
 
 
-def _active_listen_addresses() -> list[str]:
-    seen: set[str] = set()
+def _active_listen_addresses(port: int = 22) -> list[str] | None:
+    """Real enumeration of local IPv4 TCP listeners on `port` via iphlpapi
+    GetExtendedTcpTable (stdlib ctypes, no new dependency).
+
+    Returns a sorted list of local addresses, or None when the enumeration is
+    unavailable (non-Windows host, or iphlpapi failure) — callers must treat
+    None as "unknown", never as "safe".
+    """
+    if os.name != "nt":
+        return None
     try:
-        for info in socket.getaddrinfo(None, 22, socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP):
-            seen.add(info[4][0])
-    except OSError:
-        pass
-    addrs = sorted(seen)
-    return [_normalize_listen(a) for a in addrs]
+        return _active_listen_addresses_win32(port)
+    except Exception:  # noqa: BLE001
+        return None
 
 
-def _normalize_listen(addr: str) -> str:
-    return addr
+def _active_listen_addresses_win32(port: int) -> list[str]:
+    import ctypes
+    from ctypes import wintypes
+
+    AF_INET = 2
+    MIB_TCP_STATE_LISTEN = 2
+    TCP_TABLE_OWNER_PID_LISTENER = 5
+    ERROR_INSUFFICIENT_BUFFER = 122
+
+    class MIB_TCPROW_OWNER_PID(ctypes.Structure):
+        _fields_ = [
+            ("dwState", wintypes.DWORD),
+            ("dwLocalAddr", wintypes.DWORD),
+            ("dwLocalPort", wintypes.DWORD),
+            ("dwRemoteAddr", wintypes.DWORD),
+            ("dwRemotePort", wintypes.DWORD),
+            ("dwOwningPid", wintypes.DWORD),
+        ]
+
+    iphlpapi = ctypes.windll.iphlpapi  # type: ignore[attr-defined]
+    size = wintypes.DWORD(0)
+    rc = iphlpapi.GetExtendedTcpTable(
+        None, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0
+    )
+    if rc != ERROR_INSUFFICIENT_BUFFER or size.value == 0:
+        raise OSError(f"GetExtendedTcpTable sizing call failed, rc={rc}")
+    buf = (ctypes.c_byte * size.value)()
+    rc = iphlpapi.GetExtendedTcpTable(
+        buf, ctypes.byref(size), False, AF_INET, TCP_TABLE_OWNER_PID_LISTENER, 0
+    )
+    if rc != 0:
+        raise OSError(f"GetExtendedTcpTable failed, rc={rc}")
+
+    num_rows = wintypes.DWORD.from_buffer(buf, 0).value
+    row_size = ctypes.sizeof(MIB_TCPROW_OWNER_PID)
+    addrs: set[str] = set()
+    for i in range(num_rows):
+        row = MIB_TCPROW_OWNER_PID.from_buffer(buf, 4 + i * row_size)
+        if row.dwState != MIB_TCP_STATE_LISTEN:
+            continue
+        # dwLocalPort holds the 16-bit port in network byte order in its low
+        # half-word; dwLocalAddr is the IPv4 address in network byte order.
+        local_port = socket.ntohs(row.dwLocalPort & 0xFFFF)
+        if local_port != port:
+            continue
+        addrs.add(socket.inet_ntoa(struct.pack("=I", row.dwLocalAddr)))
+    return sorted(addrs)
 
 
-def _policy_check(expected: str | None, configured: list[str], active: list[str]) -> tuple[bool, str]:
-    # Wildcard exposure is unsafe.
-    for a in configured + active:
-        if a in ("0.0.0.0", "::", "::0"):
+def _policy_check(
+    expected: str | None,
+    configured: list[str],
+    active: list[str] | None,
+) -> tuple[bool, str]:
+    # Wildcard / link-local exposure is unsafe wherever it appears.
+    for a in configured + (active or []):
+        if a in _WILDCARD_ADDRS:
             return False, f"wildcard listener present: {a}"
-        if a.startswith("169.254.") or a.lower().startswith("fe80:"):
+        if any(a.lower().startswith(p) for p in _LINK_LOCAL_PREFIXES):
             return False, f"link-local listener present: {a}"
-    if expected:
-        def matches_expected(addr: str) -> bool:
-            return addr == expected or (expected in _loopback_or_private(addr, expected))
-        if configured and not any(matches_expected(a) for a in configured):
-            return False, f"configured listen {configured} does not include expected {expected}"
-    if not configured and not active:
-        return False, "no listen addresses configured"
+    # No ListenAddress line means sshd's default: wildcard bind on all
+    # interfaces. v4 treated that as safe when the pseudo-enumeration returned
+    # anything; that was a false negative. It is UNSAFE now.
+    if not configured:
+        return False, "no ListenAddress configured; sshd defaults to wildcard"
+    if expected and not any(a == expected for a in configured):
+        return False, f"configured listen {configured} does not include expected {expected}"
+    if active is None:
+        return True, ("active listener enumeration unknown (non-Windows host or "
+                      "iphlpapi failure); verdict based on configured ListenAddress only")
     return True, ""
-
-
-def _loopback_or_private(addr: str, expected: str) -> bool:
-    return False
 
 
 def _rewrite_listen_block(text: str, expected_listen: str) -> str:
@@ -185,7 +245,9 @@ def _rewrite_listen_block(text: str, expected_listen: str) -> str:
                 block = [""] + block
             block = block + [""]
             out[insert_at:insert_at] = block
-    return "\n".join(out) + ("\n" if not text.endswith("\n") and not text.endswith("\r") else "")
+    # Preserve the original trailing-newline convention (v4 had this inverted).
+    trailing = "\n" if text.endswith(("\n", "\r")) else ""
+    return "\n".join(out) + trailing
 
 
 def _atomic_write(path: str, content: str) -> None:
@@ -195,9 +257,27 @@ def _atomic_write(path: str, content: str) -> None:
     os.replace(tmp, path)
 
 
+# Log rotation (from v6/native/auditlog.py, H12): size-based, one previous
+# generation kept as `<log>.1`, gzip-free for tail-ability.
+_LOG_ROTATE_BYTES = 20 * 1024 * 1024
+
+
+def _rotate_if_large(path: str, limit: int = _LOG_ROTATE_BYTES) -> None:
+    """Size-based rotation: path -> path.1 (previous .1 is dropped)."""
+    try:
+        if os.path.getsize(path) > limit:
+            prev = path + ".1"
+            if os.path.exists(prev):
+                os.remove(prev)
+            os.replace(path, prev)
+    except OSError:
+        pass
+
+
 def _append_log(log_path: str, message: str) -> None:
     try:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        _rotate_if_large(log_path)
         with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{datetime.now(timezone.utc).isoformat()} {message}\n")
     except OSError:
