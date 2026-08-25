@@ -1,0 +1,3 @@
+376097a3dfdbb65f2201a98292572e2e873a25745429b26380c2ee4e73087257  release-assets/windows-remote-executor-native-v0.3.2-fdd-win-x64.zip
+1d63979c82609a60d6a74b13b960cb16e19058fc1794405da7d05518a7b09877  release-assets/windows-remote-executor-native-v0.3.2-scd-win-x64.zip
+b74eca8e9a6067cb39e80dd9d94ef1beade008498ffde1aaece939be1ac95576  release-assets/windows-remote-executor-v0.3.2-source.zip

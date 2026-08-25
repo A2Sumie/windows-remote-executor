@@ -1,6 +1,6 @@
 # Windows Remote Executor
 
-Windows Remote Executor is a two-part toolkit for operating Windows hosts from macOS or Linux Codex-style agentic workflows.
+Windows Remote Executor is a two-part toolkit for operating Windows hosts from macOS or Linux agent-driven workflows.
 
 - `windows-remote-executor/` is the local Python wrapper plus a small shell shim
 - `windows-remote-executor-native/` is the Windows-side native executor
@@ -55,7 +55,7 @@ Remote executor deployments must use GitHub release assets. Local publish output
 This repository also ships agent-facing entrypoints that are meant to be discovered directly by tooling:
 
 - `AGENTS.md` for repository-local agent guidance
-- `CODEX.md` for Codex style entrypoint discovery
+- `QUICKSTART.md` for entrypoint discovery
 - `templates/AGENT_INSTRUCTIONS_TEMPLATE.md` for copy-paste system-prompt or task-brief usage
 
 ## Agent Quick Start
@@ -77,4 +77,4 @@ MIT.
 
 This export was prepared as a standalone executor-only repository and intentionally excludes the rest of the workspace.
 
-Source, docs, and packaging for this repo were produced end-to-end with Codex.
+Source, docs, and packaging for this repo were produced end-to-end with an agent workflow.

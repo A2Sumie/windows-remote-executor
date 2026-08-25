@@ -14,3 +14,19 @@ windows-remote-executor-native/src/WindowsRemoteExecutor.Native/obj/
 windows-remote-executor-native/third_party/everything-cli/es.exe
 windows-remote-executor-native/third_party/everything-cli/*.zip
 windows-remote-executor-native/third_party/everything-sdk/*.zip
+
+# v0.3.x release binaries stay local-only (rebuilt from source; large zips)
+release-assets/local-fixed/
+release-assets/*.zip
+
+# WRE v5 build/release artifacts and any locally-staged native policy (token hash)
+v5/build/
+v5/release/
+v5/native/access-policy.json
+v4/build/
+v4/release/
+
+# WRE v6 build/release artifacts and locally-staged native policy
+v6/build/
+v6/release/
+v6/native/access-policy.json

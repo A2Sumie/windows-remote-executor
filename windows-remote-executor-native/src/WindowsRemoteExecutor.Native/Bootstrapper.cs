@@ -252,15 +252,83 @@ internal static class Bootstrapper
         {
             await RunRequiredAsync(sshKeyGen, "-A");
         }
+
+        HardenSshProgramDataAcls();
+    }
+
+    // Service-mode sshd (LocalSystem) refuses to start when sshd_config or the private
+    // host keys are writable by ordinary users. Foreground "sshd -t"/"sshd -d" run as the
+    // elevated admin and can mask this, so the service aborts with exit 1067. Lock down the
+    // private keys and config to SYSTEM + Administrators only.
+    private static void HardenSshProgramDataAcls()
+    {
+        var sshDir = Path.GetDirectoryName(OpenSshConfigPath);
+        if (string.IsNullOrWhiteSpace(sshDir) || !Directory.Exists(sshDir))
+        {
+            return;
+        }
+
+        var protectedPaths = new List<string>();
+        if (File.Exists(OpenSshConfigPath))
+        {
+            protectedPaths.Add(OpenSshConfigPath);
+        }
+
+        foreach (var keyFile in Directory.EnumerateFiles(sshDir, "ssh_host_*_key"))
+        {
+            protectedPaths.Add(keyFile);
+        }
+
+        foreach (var path in protectedPaths)
+        {
+            HardenSshFileAcl(path);
+        }
+    }
+
+    private static void HardenSshFileAcl(string filePath)
+    {
+        try
+        {
+            RunProcessAllowFailureAsync("takeown.exe", new[] { "/F", filePath, "/A" }).GetAwaiter().GetResult();
+            RunProcessAllowFailureAsync("icacls.exe", new[] { filePath, "/inheritance:r" }).GetAwaiter().GetResult();
+            RunProcessAllowFailureAsync(
+                "icacls.exe",
+                new[]
+                {
+                    filePath,
+                    "/remove:g",
+                    $@"{Environment.MachineName}\{Environment.UserName}",
+                    Environment.UserName,
+                    "Users",
+                    "Authenticated Users",
+                    "Everyone"
+                }).GetAwaiter().GetResult();
+            RunRequiredAsync("icacls.exe", new[] { filePath, "/grant:r", "SYSTEM:F", "Administrators:F" }).GetAwaiter().GetResult();
+        }
+        catch
+        {
+            // Best effort; sshd config validation or service start will surface a hard failure later.
+        }
     }
 
     private static void SetSshListenAddress(string address)
     {
         _ = System.Net.IPAddress.Parse(address);
 
+        // A truly fresh host (or one where sshd has never started) may not have sshd_config
+        // yet. Earlier behavior threw FileNotFoundException and aborted bootstrap; a prior
+        // manual "mkdir sshd_config" also left a directory at this path. In both cases write a
+        // known-good managed config instead of failing.
+        if (Directory.Exists(OpenSshConfigPath))
+        {
+            Directory.Delete(OpenSshConfigPath, recursive: true);
+        }
+
         if (!File.Exists(OpenSshConfigPath))
         {
-            throw new FileNotFoundException($"sshd_config not found: {OpenSshConfigPath}");
+            WriteManagedSshConfig(address);
+            HardenSshProgramDataAcls();
+            return;
         }
 
         var config = File.ReadAllText(OpenSshConfigPath);
@@ -283,6 +351,36 @@ internal static class Bootstrapper
 
         var rewritten = string.Join("\r\n", lines).TrimEnd() + "\r\n";
         File.WriteAllText(OpenSshConfigPath, rewritten, System.Text.Encoding.ASCII);
+        HardenSshProgramDataAcls();
+    }
+
+    private static void WriteManagedSshConfig(string listenAddress)
+    {
+        var directory = Path.GetDirectoryName(OpenSshConfigPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var lines = new[]
+        {
+            "# Managed by WindowsRemoteExecutor.Native bootstrap",
+            "Port 22",
+            "PubkeyAuthentication yes",
+            "PasswordAuthentication no",
+            "AuthorizedKeysFile .ssh/authorized_keys",
+            "HostKey __PROGRAMDATA__/ssh/ssh_host_rsa_key",
+            "HostKey __PROGRAMDATA__/ssh/ssh_host_ecdsa_key",
+            "HostKey __PROGRAMDATA__/ssh/ssh_host_ed25519_key",
+            "Subsystem sftp sftp-server.exe",
+            $"ListenAddress {listenAddress}",
+            string.Empty,
+            "Match Group administrators",
+            "    AuthorizedKeysFile __PROGRAMDATA__/ssh/administrators_authorized_keys",
+            string.Empty
+        };
+
+        File.WriteAllText(OpenSshConfigPath, string.Join("\r\n", lines), Encoding.ASCII);
     }
 
     private static void EnsureCodexLayout(string codexRoot)

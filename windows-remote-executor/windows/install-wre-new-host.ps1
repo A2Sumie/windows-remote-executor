@@ -252,8 +252,8 @@ exit /b %ERRORLEVEL%
     Set-Content -LiteralPath $guardScriptPath -Value $guardScript -Encoding ascii
 
     $taskCommand = '"{0}"' -f $guardScriptPath
-    & schtasks.exe /Delete /TN 'CodexRemote Sshd Guard Startup' /F *> $null
-    & schtasks.exe /Delete /TN 'CodexRemote Sshd Guard Watch' /F *> $null
+    cmd.exe /c 'schtasks.exe /Delete /TN "CodexRemote Sshd Guard Startup" /F >NUL 2>NUL & exit /b 0'
+    cmd.exe /c 'schtasks.exe /Delete /TN "CodexRemote Sshd Guard Watch" /F >NUL 2>NUL & exit /b 0'
     & schtasks.exe /Create /TN 'CodexRemote Sshd Guard Startup' /SC ONSTART /RU SYSTEM /TR $taskCommand /F | Out-Null
     & schtasks.exe /Create /TN 'CodexRemote Sshd Guard Watch' /SC MINUTE /MO 5 /RU SYSTEM /TR $taskCommand /F | Out-Null
 

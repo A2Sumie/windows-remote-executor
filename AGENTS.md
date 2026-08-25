@@ -1,95 +1,134 @@
 # Agent Guide
 
-Use this repository to operate Windows hosts from macOS or Linux through structured V3 executor routes.
+Use this repository to operate Windows hosts (X570, nuc-8-sumie / NUC8) from
+macOS/Linux through the WRE v4 control plane.
 
 ## Source Of Truth
 
-- Wrapper: `windows-remote-executor/bin/win-remote`
-- MCP server: `windows-remote-executor/mcp/win_remote_mcp.py`
-- Native executor: `windows-remote-executor-native/src/WindowsRemoteExecutor.Native`
-- Parent-workspace `windows-remote-executor/` and `windows-remote-executor-native/` paths may be symlinks into this repo. Keep this repo as the source tree.
-- From the parent livestr workspace, run Git commands with `git -C windows-remote-executor-public ...` or an explicit owning repo path.
-- Deploy executor updates only from GitHub release assets after a tag/release. Local publish output is for build verification and immediate handoff packages, not production host update proof.
+- v4 source tree: `v4/`
+  - native entry (runs on Windows): `v4/native/rpc.py`
+  - controller CLI / library: `v4/controller/`
+  - bootstrap + verify scripts: `v4/scripts/`
+  - protocol doc: `v4/V4.md`
+  - status: deployed on X570; tree frozen — fixes land in v5, do not edit v4 in place.
+- v5 audit-hardened fix tree (protocol v5): `v5/` — protocol doc `v5/V5.md`.
+- v6 agent-first tree (protocol v6, process.*/wsl.*/loop mode/MCP): `v6/` — protocol doc `v6/V6.md`. Sidecar-deployable via `deploy_sftp.py --entry-root C:/CodexRemote/wre6`; controller override `WRE_ENTRY` / `--entry`. **Rebrand 2026-08-19:** v6 defaults flipped to `C:/WRE` / task prefix `WRE` (see `v6/V6.md` "Rebrand note"); X570 itself was NOT migrated — the live v4 tree `C:/CodexRemote/wre` and the v6 sidecar `C:/CodexRemote/wre6` keep working via `WRE_ENTRY`/`--entry` overrides, and `C:/CodexRemote/wre` stays hardcoded-protected forever.
+- Legacy (kept only until X570 rolls to v4):
+  - `windows-remote-executor/` — v3 Python wrapper / CLI / MCP
+  - `windows-remote-executor-native/` — v3 C# native executor
+- From the parent livestr workspace, run Git commands with `git -C windows-remote-executor-public ...`.
+
+## v4 Entry Point
+
+Fixed remote SSH command:
+
+```
+C:/CodexRemote/wre/python/python.exe -I -X utf8 C:/CodexRemote/wre/rpc.py rpc-stdio
+```
+
+stdin = one UTF-8 JSON request line. stdout = one UTF-8 JSON response line.
+No PowerShell/cmd strings travel from the controller (transport constraint).
+To run PowerShell or TaskScheduler COM on the host, `file.writeText` the script
+and execute it via `host.task.create` (manual, `run_as_user`=SYSTEM) +
+`host.task.run`. That in-host script runs as SYSTEM with full TaskScheduler COM
+access, so it can create/modify any trigger type (including weekly) and kill
+processes.
 
 ## First Steps
 
-1. Read `windows-remote-executor/README.md`.
-2. Locate the real target env file outside git-tracked defaults.
-3. Start with `./windows-remote-executor/bin/win-remote probe <target>`.
-4. For routine agent use, prefer MCP tools over shell-authored command strings.
-5. If the task touches exposure, policy, or connectivity, run `./windows-remote-executor/bin/win-remote guard <target>`.
+1. Read `v4/V4.md`.
+2. Locate the real target env file at `windows-remote-executor/targets/<name>.env`.
+3. Probe:
+   ```bash
+   python3 -m v4.controller.shell X570 --probe
+   ```
+4. For interactive use:
+   ```bash
+   python3 -m v4.controller.shell X570 --repl
+   ```
+5. Verify the full RPC surface after a deploy:
+   ```bash
+   PYTHONPATH=. python3 -m v4.scripts.verify_v4_remote X570
+   ```
 
-## Route Choice
+## Action Surface (v4)
 
-- MCP tools call the Python V3 client directly; use them for routine agent work: `win_probe`, `win_run`, `win_capture`, `win_wsl*`, `win_exec*`, `win_tasks`, `win_put`, `win_get`, `win_guard`, and `win_repair`.
-- The only remote-control transport is native V3 `rpc-stdio`: fixed remote command `WindowsRemoteExecutor.Native.exe rpc-stdio`, one UTF-8 JSON request line on stdin, one UTF-8 JSON response line on stdout.
-- `run`, `capture`, and `spawn` are native argv routes. Use them for concrete Windows executables such as `whoami.exe`, `tasklist.exe`, `reg.exe`, `curl.exe`, `dism.exe`, `dotnet`, `git`, and app binaries.
-- `capture` returns structured output and raw bytes; use it when process output may be localized, UTF-16, codepage-shaped, or byte-sensitive.
-- `exec` and `exec-capture` send PowerShell or cmd script bodies through V3 `script.run` / `script.capture`. Use `--file` or `--stdin` for Windows state or maintenance scripts.
-- `exec --shell cmd` and compatibility `cmd` are for cmd-shaped scripts.
-- `py` is for Python scripts on the Windows host.
-- `wsl` and `wsl-capture` call V3 `wsl.run` / `wsl.capture`.
-- `wsl-py` and `wsl-py-capture` run WSL Python through explicit interpreter, cwd, module/script, and args.
-- `wsl-sh` and `wsl-sh-capture` send script bodies through V3 `wsl.script` / `wsl.script.capture` so the script body stays out of SSH argv.
-- `wsl-resident` launches a WSL script and returns readiness diagnostics for durable services.
-- `put`, `get`, and `deploy` move bytes with `scp`; V3 RPC handles the control-plane setup such as directory creation and post scripts.
-- `policy`, `guard`, and `repair` manage access policy and `sshd` safety.
-- `tasks` or MCP `win_tasks` inspect scheduled tasks.
-- `update-tools --native-zip <release-asset.zip>` deploys a release asset and flips `C:\CodexRemote\tools\WindowsRemoteExecutor.cmd`.
+| Group | Actions |
+|---|---|
+| Host | `host.capabilities`, `host.probe`, `host.guard`, `host.repair`, `host.policy` |
+| Tasks (read) | `host.tasks.list`, `host.tasks.detail` |
+| Tasks (write) | `host.task.create`, `host.task.update`, `host.task.run`, `host.task.delete`, `host.tasks.apply` — WRE runs as SYSTEM, so these operate directly under that token (no per-call elevation). `trigger` supports manual/time/logon/boot/interval only; for weekly/other triggers, drive TaskScheduler COM from an in-host script (`file.writeText` + `host.task.create` manual + `host.task.run`). |
+| Files | `file.writeText`, `file.readText`, `file.mkdir`, `file.deleteTree`, `file.copy`, `file.putBinary` (base64, ≤ 4 MB), `file.list`, `file.search` |
 
-## Route And Policy Boundary
+Removed vs v3: `process.run`/`capture`/`spawn`, `script.run`/`capture`,
+`python.run`, `wsl.*`, `everything.search`, `argv-only` policy mode.
 
-- Prefer the route with the lowest expected error rate for the concrete task. In normal agent work, that is MCP, structured argv, `capture`, or V3 script actions.
-- The wrapper has a default guard for `powershell.exe` and `pwsh` through `run`, `capture`, and `spawn`; `--allow-powershell` and `WIN_REMOTE_ALLOW_RAW_POWERSHELL=1` are explicit escape hatches when that route is lower-risk.
-- On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
-- `argv-only` still allows V3 script actions for staged maintenance. Use that bridge when script-shaped maintenance is the lower-error route under this policy.
-- Record the actual route choice and verification evidence instead of reducing the policy to a blanket PowerShell claim.
-- If existing routes cannot represent a workflow without fragile quoting, add a V3 RPC action plus MCP/tool support before adding another quoting convention.
-- Use forward slashes for Windows paths, for example `D:/StreamServ/auto_stream.py`, or quote backslash paths. The wrapper rejects drive-relative shapes such as `D:StreamServauto_stream.py` because they usually mean the local shell stripped backslashes.
+## Routing Notes
 
-## WSL Boundary
+- All WRE remote-control payloads travel as JSON on SSH stdin. Payloads never
+  appear in argv, PowerShell, or `cmd /c` text.
+- To launch an arbitrary script/process on the host, register a task on the fly
+  (no elevated deploy-wre needed): `host.task.create` with `trigger`=`manual`,
+  `run_as_user`=`SYSTEM`, `exe`=`powershell.exe`, `args`=`-File <script>`, then
+  `host.task.run` it. The script runs as SYSTEM with full COM access. The
+  elevated `deploy-wre.py --tasks-only` step is only the one-time bootstrap for
+  the sshd-repair / WRE-Apply agent tasks.
+- File transfers larger than 4 MB go through SFTP directly from the controller
+  (`v4/controller.sftp`); the `file.putBinary` RPC action is for small in-band
+  payloads only.
+- The v3 native C# binary and `win-remote` CLI remain in this repo only while
+  X570 is still on v3. For X570 / nuc-8-sumie, use only `v4/` (or `v5/` once deployed).
 
-- Use `wsl`/`wsl-capture` for direct Linux argv.
-- Use `wsl-sh --file` or `--stdin` for longer Linux shell scripts.
-- Use `wsl-resident` when the goal is a long-lived WSL service; treat launch success as provisional until delayed listener, health, process, log, or GPU proof passes.
-- Keep long-lived models, caches, venvs, and hot code on WSL ext4 paths such as `/home/...`, not `/mnt/*`.
-- Use absolute WSL paths for brittle interpreters and GPU tools, for example `/home/.../.venv/bin/python` and `/usr/lib/wsl/lib/nvidia-smi`.
-- Use `win-remote run ... wsl.exe ...` only for Windows-side WSL administration such as install, version selection, or shutdown.
+## Deployment
 
-## Encoding And Parsing
-
-- Treat localized Windows CLI text as human-oriented unless captured bytes or JSON prove otherwise.
-- Prefer `capture` for process output decisions.
-- Prefer `exec --stdin` plus `ConvertTo-Json -Compress` for Windows state decisions.
-- Prefer `wsl-capture` over PTY scraping for machine decisions from Linux commands.
-
-## Security
-
-- Keep targets `private-only` unless the operator explicitly changes that requirement.
-- Keep `access-policy.json`, token enforcement, and `sshd` guard tasks in place.
+- **Light deploy (no elevation)** — `python3 -m v4.scripts.deploy_sftp <target>`
+  SFTP-uploads the embeddable Python + v4 source tree to `C:/CodexRemote/wre/`
+  and rewrites `access-policy.json` from the existing v3 token hash.
+- **Elevated deploy (one-time, on the Windows host)** — operator elevates and
+  runs `C:\CodexRemote\wre\python\pythonw.exe C:\CodexRemote\wre\deploy-wre.py
+  --target-name <name> --expected-listen <tailscale-ip> --access-token <plain>`
+  to re-create the sshd self-repair scheduled tasks (via TaskScheduler COM,
+  not schtasks.exe) and pre-register any app-specific tasks like StreamServ.
 
 ## Verification
 
 Use the checks that match the change:
 
-1. `win-remote probe <target>`
-2. one native argv smoke test such as `win-remote run <target> whoami.exe`
-3. `win-remote guard <target>` if networking or policy changed
-4. one `exec --file` or `exec --stdin` path if staged Windows script behavior changed
-5. one `wsl-capture`, `wsl-sh-capture`, or `wsl-resident` proof if WSL behavior changed
-6. Python CLI tests and native build/selftest before release deployment; `scripts/verify-v3-remote-cases.sh <target>` when the target is available
+1. `python3 -m v4.controller.shell <target> --probe`
+2. `PYTHONPATH=. python3 -m v4.scripts.verify_v4_remote <target>` (full 13-step matrix)
+3. `host.tasks.list` if scheduled tasks changed
+4. `host.guard` (noDisable=true) if exposure/policy changed
+5. `host.task.run` smoke if task lifecycle changed (only after elevation)
 
-## Minimal Workflow
+## StreamServ Migration Sketch (X570, future)
 
-```bash
-./windows-remote-executor/bin/win-remote probe <target>
-./windows-remote-executor/bin/win-remote run <target> whoami.exe
-./windows-remote-executor/bin/win-remote put <target> ./local.file C:/CodexRemote/inbox/local.file
-./windows-remote-executor/bin/win-remote deploy <target> ./dist C:/CodexRemote/apps/myapp
-./windows-remote-executor/bin/win-remote update-tools <target> --native-zip <release-asset.zip>
-```
+When X570 rolls to v4:
 
-## More Templates
+1. Register scheduled task once at elevated deploy-wre:
+   ```
+   host.task.create {
+     "name": "CodexRemote StreamServ Start",
+     "exe": "D:/StreamServ/start_streamserv.bat",
+     "trigger": "manual",
+     "run_as_user": "SYSTEM",
+     "run_level": 1
+   }
+   ```
+2. Trigger remotely:
+   ```
+   host.task.run { "name": "CodexRemote StreamServ Start" }
+   ```
+3. Read logs:
+   ```
+   file.readText { "path": "D:/StreamServ/logs/latest.log" }
+   ```
 
-- Copy-paste prompt template: `templates/AGENT_INSTRUCTIONS_TEMPLATE.md`
-- Codex-oriented entrypoint: `CODEX.md`
+No `process.run`; the controller sends no shell strings over SSH. In-host
+PowerShell/COM is runnable via a created task (`file.writeText` + `host.task.create` manual + `host.task.run`).
+
+## Files To Graduate Later
+
+- `windows-remote-executor/` and `windows-remote-executor-native/` will be
+  removed from this repo once X570 publishes a v4 release and operator runs
+  the elevated deploy.
+- `release-assets/*.zip` for v0.3.x will move to `release-assets/legacy-v3/`.

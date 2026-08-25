@@ -1,4 +1,4 @@
-# Codex Quick Start
+# Quick Start
 
 Read `AGENTS.md` first. Use MCP tools for routine Windows work and `windows-remote-executor/bin/win-remote` for manual debugging, deployment, and bootstrap packaging. `win-remote` is a Python shim around the V3 `rpc-stdio` client; there is no older transport fallback.
 
