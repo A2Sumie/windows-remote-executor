@@ -614,9 +614,13 @@ def job_run_main(spec_path: str) -> int:
     except OSError:
         pass
     # H14: durable history line (job log itself expires with retention).
+    # (2026-08-25 nuc live-run caught a NameError here — the bare except
+    # swallowed a wrong constant name and shipped an empty logTail; the
+    # except is now OSError-only so a bug like that CRASHES the supervisor
+    # loudly instead of silently losing the record.)
     try:
-        log_tail = _decode(_log_tail_bytes(job_id, JOBS_HISTORY_TAIL))
-    except Exception:  # noqa: BLE001
+        log_tail = _decode(_log_tail_bytes(job_id, JOBS_HISTORY_TAIL_BYTES))
+    except OSError:
         log_tail = ""
     audit_job_history(meta, log_tail)
     audit_job("exit", jobId=job_id, pid=meta.get("pid"), exitCode=exit_code,
@@ -715,6 +719,7 @@ def process_start(payload: dict[str, Any]) -> dict[str, Any]:
         "supervisorPid": None,
         "exe": exe,
         "args": args,
+        "argsSha256": hashlib.sha256(json.dumps([exe, *args]).encode("utf-8")).hexdigest(),
         "cwd": str(payload.get("cwd") or ""),
         "startedAt": now_iso(),
         "state": "running",
