@@ -269,7 +269,8 @@ def list_dir(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def search(payload: dict[str, Any]) -> dict[str, Any]:
-    root = _norm(payload.get("root", ""))
+    # `path` accepted as an alias for `root` (consistency with file.list).
+    root = _norm(payload.get("root") or payload.get("path", ""))
     name_glob = payload.get("nameGlob")
     content_regex = payload.get("contentRegex")
     if not name_glob and not content_regex:

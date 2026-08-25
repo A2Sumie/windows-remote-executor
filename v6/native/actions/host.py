@@ -142,9 +142,13 @@ def _probe_os() -> dict[str, Any]:
 
 def _uptime_hours() -> float:
     try:
-        import win32api  # type: ignore
-        boot = datetime.fromtimestamp(win32api.GetTickCount64() / 1000.0, tz=timezone.utc)
-        return round((datetime.now(tz=timezone.utc) - boot).total_seconds() / 3600.0, 2)
+        # pywin32 exposes only GetTickCount (32-bit, wraps at ~49.7 days);
+        # GetTickCount64 must come from kernel32 via ctypes. The pre-v6.1
+        # code called win32api.GetTickCount64 which does not exist, so
+        # uptimeHours silently reported 0.0 forever.
+        import ctypes
+        tick_ms = ctypes.windll.kernel32.GetTickCount64()
+        return round(tick_ms / 1000.0 / 3600.0, 2)
     except Exception:  # noqa: BLE001
         return 0.0
 
