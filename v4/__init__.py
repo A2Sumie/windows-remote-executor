@@ -1,0 +1,1 @@
+"""WRE v4 — top-level package marker."""
