@@ -12,7 +12,7 @@ macOS/Linux through the WRE v4 control plane.
   - protocol doc: `v4/V4.md`
   - status: deployed on X570; tree frozen — fixes land in v5, do not edit v4 in place.
 - v5 audit-hardened fix tree (protocol v5): `v5/` — protocol doc `v5/V5.md`.
-- v6 agent-first tree (protocol v6, process.*/wsl.*/loop mode/MCP): `v6/` — protocol doc `v6/V6.md`. **Cutover 2026-08-25:** both X570 and nuc-8-sumie serve v6.1 from the default `C:/WRE/wre` — the plain controller invocation (no `WRE_ENTRY`) is the daily route, and the `WRE *` SYSTEM tasks point at the new tree. The legacy v4 tree `C:/CodexRemote/wre` stays live (234 X570 v4 tasks + rollback lane, hardcoded-protected forever); the old sidecar `C:/CodexRemote/wre6` is unreferenced and pending deletion at the 2026-08-27 cleanup.
+- v6 agent-first tree (protocol v6, process.*/wsl.*/loop mode/MCP): `v6/` — protocol doc `v6/V6.md`. **Cutover 2026-08-25:** both X570 and nuc-8-sumie serve v6.1 from the default `C:/WRE/wre` — the plain controller invocation (no `WRE_ENTRY`) is the daily route, the `WRE *` SYSTEM tasks point at the new tree, and every enabled scheduled task was migrated off the legacy tree (X570: 20 tasks rewired; backups in `C:\WRE\logs\task-backup-20260825\`). The legacy v4 tree `C:/CodexRemote/wre` is cold standby (zero enabled tasks reference it; hardcoded-protected forever); the old sidecar `C:/CodexRemote/wre6` is unreferenced and pending deletion at the 2026-08-27 cleanup.
 - Legacy (kept only until X570 rolls to v4):
   - `windows-remote-executor/` — v3 Python wrapper / CLI / MCP
   - `windows-remote-executor-native/` — v3 C# native executor

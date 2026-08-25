@@ -3,12 +3,9 @@
 Naming parameterization (2026-08-19: brand flipped CodexRemote -> WRE):
 Every on-host path and scheduled-task name prefix funnels through the two
 constants below. Defaults are now `C:/WRE` / `WRE`. The legacy fleet tree
-(X570: 234 live v4 tasks referencing C:\\CodexRemote\\wre\\python\\python.exe)
-is NOT migrated by this flip — it keeps working under env overrides, and the
-legacy `C:/CodexRemote/wre` tree stays hardcoded-protected in
-actions/files.py forever (it is "protect the old tree", not brand residue).
-Migrating X570 to C:/WRE is a deliberate future cutover window, not something
-v6 does on install.
+`C:/CodexRemote/wre` was fully retired on 2026-08-25 (all enabled tasks
+migrated to C:/WRE/wre python); it stays on disk as cold-standby rollback
+and stays hardcoded-protected in actions/files.py forever.
 
   WRE_ROOT    on-host root directory holding jobs/, logs/, inbox/ and the
               wre tree itself. Env override: WRE_ROOT.

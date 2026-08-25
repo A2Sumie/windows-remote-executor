@@ -54,9 +54,10 @@ _WSL_UNC_PREFIX = "//wsl.localhost/"
 # Guardrail prefixes (see module docstring for the threat-model honesty note).
 _PROTECTED_PREFIXES = (
     "C:/WRE/wre",          # hardcoded: the default v6 tree, even from a sidecar
-    "C:/CodexRemote/wre",  # hardcoded LEGACY: the live v4/v5 fleet tree —
-                           # kept permanently after the 2026-08-19 rebrand
-                           # (234 live X570 tasks still reference it)
+    "C:/CodexRemote/wre",  # hardcoded LEGACY: the retired v4/v5 fleet tree —
+                           # cold standby since the 2026-08-25 task migration
+                           # (zero enabled tasks reference it; kept for
+                           # emergency rollback only)
     WRE_TREE,              # dynamic: the running rpc.py's own tree (wre/wre6/...)
     "C:/ProgramData/ssh",
     "C:/Windows",
