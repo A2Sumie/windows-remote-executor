@@ -25,7 +25,8 @@ from __future__ import annotations
 import os
 
 PROTOCOL_VERSION = 6
-BUILD = "v6"
+BUILD = "v6.1"  # 2026-08-25 hardening: reap grace, killVerified, audit
+#               rotation, jobs-history, scan caps, controller deadline
 
 WRE_ROOT = os.environ.get("WRE_ROOT") or "C:/WRE"
 TASK_PREFIX = os.environ.get("WRE_TASK_PREFIX") or "WRE"

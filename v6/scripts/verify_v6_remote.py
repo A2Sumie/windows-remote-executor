@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     # --- capabilities / version / schema surface ---
     data = step("capabilities", "host.capabilities")
     if data:
-        ok = (data.get("build") == "v6" and data.get("version") == 6
+        ok = (str(data.get("build") or "").startswith("v6") and data.get("version") == 6
               and len(data.get("actions", [])) == EXPECTED_ACTIONS
               and len(data.get("schemas", {})) == EXPECTED_ACTIONS)
         print(f"        build={data.get('build')} version={data.get('version')} "
