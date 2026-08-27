@@ -12,7 +12,7 @@ process spawn. See:
 - `../AGENTS.md` — v4-first agent guide
 - `../v4/V4.md` — protocol contract
 - `../v4/scripts/verify_v4_remote.py` — verification matrix
-- Skill `wre-v4` in `~/.claude/skills/wre-v4/SKILL.md`
+- Skill `wre` in `~/.config/opencode/skills/wre/SKILL.md` (renamed from `wre-v4`, 2026-08-27)
 
 ## What v4 removed (do not reach back into v3 for these)
 
