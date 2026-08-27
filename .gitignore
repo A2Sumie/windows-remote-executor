@@ -1,5 +1,7 @@
 .DS_Store
 *.zip
+# The v6.1.0 bootstrap package is deliberately tracked for new-machine setup:
+!releases/**/*.zip
 __pycache__/
 
 windows-remote-executor/targets/*.env
