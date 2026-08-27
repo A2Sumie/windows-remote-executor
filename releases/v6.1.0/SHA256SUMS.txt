@@ -1,1 +1,1 @@
-8443c85d304aa21ee8c2a1c0a47d11465f52225a41e2de70bde99762867fdacd  v6/release/wre-6.1.0-windows-x64.zip
+b24b530f18cd56ba6459488eafe6a32e18ce8e1a209d041a12cebf0a265fcb0e  v6/release/wre-6.1.1-windows-x64.zip
