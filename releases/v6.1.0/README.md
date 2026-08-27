@@ -26,32 +26,39 @@ wre/python/            standalone CPython 3.12 + wheels, preinstalled
 
 ## New-machine setup (operator steps)
 
-1. **Windows host prerequisites**: Administrator PowerShell; OpenSSH Server
-   feature available (`Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0`
-   if absent); know the host's tailscale/LAN IP.
-2. Copy the zip to the host (SMB/USB/`scp`), expand:
+> A fresh Windows box has **no** `C:\WRE` and a standard user cannot create it.
+> Extract somewhere user-writable first (e.g. Downloads); elevate only for the
+> install step — `deploy-wre.py` creates `C:\WRE\wre` itself (`mkdir -p`).
+
+1. **Download & extract (normal, non-elevated shell):**
    ```powershell
-   Expand-Archive .\wre-6.1.0-windows-x64.zip -DestinationPath C:\WRE\pkg
+   Expand-Archive .\wre-6.1.0-windows-x64.zip -DestinationPath "$env:USERPROFILE\Downloads\wre-pkg"
    ```
-3. **Elevated install** (creates `C:/WRE/wre` tree, sshd self-repair tasks,
-   SYSTEM apply-agent; token source required — exactly one of):
+2. **Elevated install** (Right-click PowerShell → Run as administrator):
    ```powershell
-   & C:\WRE\pkg\wre\python\python.exe C:\WRE\pkg\deploy-wre.py `
+   & "$env:USERPROFILE\Downloads\wre-pkg\deploy-wre.py" `
        --target-name <NAME> --expected-listen <HOST-IP> `
-       --access-token <plain-token>
+       --access-token <random-long-secret>
    # or: --keep-existing-policy  (when re-installing over an existing tree)
    ```
-   `<plain-token>` is any long random secret you generate; only its sha256 is
-   stored on the host (`access-policy.json`). Record it for the controller side.
-4. **Controller side** (macOS/Linux), add a target env file
+   `<random-long-secret>` is any long random string you generate; only its
+   sha256 is stored on the host (`access-policy.json`). Record it for the
+   controller side. The installer selftests the package, copies the tree to
+   `C:\WRE\wre` (creating it), writes the policy, pins sshd_config ListenAddress
+   (skips gracefully when OpenSSH Server isn't set up yet) and registers the
+   sshd repair tasks + SYSTEM apply-agent.
+
+   If OpenSSH Server is not installed yet:
+   `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0` then `Start-Service sshd`.
+3. **Controller side** (macOS/Linux), add a target env file
    `windows-remote-executor/targets/<NAME>.env` (copy `example.env`; fields:
    SSH host/user/key/port + `TARGET_ACCESS_TOKEN` = same plain token).
-5. Light deploy / update later needs NO elevation:
+4. Light deploy / update later needs NO elevation:
    ```bash
    PYTHONPATH=. python3 -m v6.scripts.deploy_sftp <NAME>
    PYTHONPATH=. python3 -m v6.scripts.verify_v6_remote <NAME>
    ```
-6. Smoke test:
+5. Smoke test:
    ```bash
    PYTHONPATH=. python3 -m v6.controller.shell <NAME> --info
    ```
