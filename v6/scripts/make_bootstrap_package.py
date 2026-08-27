@@ -242,7 +242,10 @@ def copy_deploy_script(dest_root: Path) -> None:
     # C:/WRE/wre/deploy-wre.py.
     wre_target = dest_root / "wre" / "deploy-wre.py"
     shutil.copy2(SCRIPTS_SRC / "deploy_wre.py", wre_target)
-    print(f"[bootstrap] copied deploy-wre.py -> {target} and {wre_target}")
+    # One-command installer wrapper (self-elevating, sshd check, arg contract):
+    ps1 = dest_root / "install-wre.ps1"
+    shutil.copy2(SCRIPTS_SRC / "install_wre_template.ps1", ps1)
+    print(f"[bootstrap] copied deploy-wre.py -> {target} and {wre_target}; installer -> {ps1}")
 
 
 def write_manifest(dest_root: Path, version: str) -> None:

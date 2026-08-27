@@ -34,7 +34,14 @@ wre/python/            standalone CPython 3.12 + wheels, preinstalled
    ```powershell
    Expand-Archive .\wre-6.1.0-windows-x64.zip -DestinationPath "$env:USERPROFILE\Downloads\wre-pkg"
    ```
-2. **Elevated install** (Right-click PowerShell → Run as administrator):
+2. **One-command install** (the script self-elevates, checks sshd, validates args):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\Downloads\wre-pkg\install-wre.ps1" ^
+       -Name <NAME> -Listen <HOST-IP> -Token <random-long-secret>
+   # re-install over an existing tree without retyping the token:
+   powershell -ExecutionPolicy Bypass -File ...\install-wre.ps1 -KeepPolicy
+   ```
+   Equivalent manual path (what the wrapper drives):
    ```powershell
    & "$env:USERPROFILE\Downloads\wre-pkg\deploy-wre.py" `
        --target-name <NAME> --expected-listen <HOST-IP> `
@@ -48,8 +55,8 @@ wre/python/            standalone CPython 3.12 + wheels, preinstalled
    (skips gracefully when OpenSSH Server isn't set up yet) and registers the
    sshd repair tasks + SYSTEM apply-agent.
 
-   If OpenSSH Server is not installed yet:
-   `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0` then `Start-Service sshd`.
+   If OpenSSH Server is not installed yet, `install-wre.ps1` offers to run:
+   `Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0` then starts sshd.
 3. **Controller side** (macOS/Linux), add a target env file
    `windows-remote-executor/targets/<NAME>.env` (copy `example.env`; fields:
    SSH host/user/key/port + `TARGET_ACCESS_TOKEN` = same plain token).
