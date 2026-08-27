@@ -296,6 +296,69 @@ def wre_help(target: str, action: str | None = None,
     return _call(target, "system.help", {"action": action} if action else {}, entry_root)
 
 
+# ---------- wreq: USN-fresh whole-volume file search ----------
+
+_WREQ = "C:/WRE/tmp/wreq.exe"
+
+
+@mcp.tool()
+def wre_find(target: str, query: str, db: str | None = None,
+             n: int = 50, fresh: bool = False, path_mode: bool = False,
+             json_out: bool = True, sort_name: bool = False,
+             entry_root: str | None = None) -> str:
+    """Fast file search over the wreq snapshot index (Everything-RE derived).
+
+    Query syntax: substrings AND together ("neo mkv"), "quoted phrase",
+    *.wild cards, ext:mp4|mkv, size:>4gb / 500mb..2gb,
+    dm:>7d|today|2026-08-01..2026-08-15, path:D:\\dir\\ , dir: / file:, case:.
+    Returns NDJSON hits {name,path,size,mtime_unix,is_dir} + a stderr count
+    line. Millisecond-scale on million-entry indexes; `fresh` folds the USN
+    journal delta first so just-created files are visible (needs admin).
+    Falls back to wre_search for non-NTFS volumes or when no index exists.
+    """
+    args = ["find", query]
+    if db:
+        args += ["-db", db]
+    if n != 50:
+        args += ["-n", str(n)]
+    if fresh:
+        args.append("-fresh")
+    if path_mode:
+        args.append("-path")
+    if json_out:
+        args.append("-json")
+    if sort_name:
+        args.append("-sort")
+    return _call(target, "process.run",
+                 {"exe": _WREQ, "args": args, "captureKB": 64,
+                  "timeoutMs": 90_000 if fresh else 60_000},
+                 entry_root, timeout_ms=120_000)
+
+
+@mcp.tool()
+def wre_find_check(target: str, db: str | None = None,
+                   entry_root: str | None = None) -> str:
+    """wreq index health: age, files/dirs counts, cursor freshness."""
+    args = ["check"] + (["-db", db] if db else [])
+    return _call(target, "process.run",
+                 {"exe": _WREQ, "args": args, "captureKB": 8, "timeoutMs": 30_000},
+                 entry_root, timeout_ms=60_000)
+
+
+@mcp.tool()
+def wre_find_catchup(target: str, max_age_min: float = 0,
+                     db: str | None = None,
+                     entry_root: str | None = None) -> str:
+    """Fold the USN journal delta into the wreq index now (admin).
+    Zero-cost when already fresh; auto-rescans when the journal wrapped."""
+    args = ["catchup", "--max-age", str(max_age_min)]
+    if db:
+        args += ["-db", db]
+    return _call(target, "process.run",
+                 {"exe": _WREQ, "args": args, "captureKB": 8, "timeoutMs": 180_000},
+                 entry_root, timeout_ms=240_000)
+
+
 def main() -> None:
     mcp.run(transport="stdio")
 
