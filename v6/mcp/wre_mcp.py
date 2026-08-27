@@ -77,8 +77,16 @@ def wre_run(target: str, exe: str, args: list[str] | None = None,
             env: dict[str, str] | None = None, timeout_ms: int | None = None,
             capture_kb: int | None = None, entry_root: str | None = None) -> str:
     """Run an exe on the host synchronously; returns exitCode/stdout/stderr/
-    timedOut/durationMs. exe must be an absolute path; args is an argv array
-    (never a shell string). Server-side timeout kills the process."""
+    timedOut/durationMs.
+
+    Conventions (avoids all backslash/quote failures):
+    - exe: absolute path, FORWARD slashes preferred (C:/Windows/System32/cmd.exe) —
+      JSON-safe with zero escaping.
+    - args: argv ARRAY, one element per token. NEVER stuff a whole command line
+      into one element and never use shell syntax ('|', '>', ';', quotes).
+      For cmd.exe built-ins pass ["C:/Windows/System32/cmd.exe","/d","/c","prog","arg1","arg2"].
+    - Paths in args: forward slashes are accepted by virtually every Windows program;
+      use them instead of backslashes to sidestep escaping entirely."""
     payload: dict[str, Any] = {"exe": exe}
     if args is not None:
         payload["args"] = args
@@ -252,7 +260,10 @@ def wre_task_create(target: str, name: str, exe: str,
                     expires_at: str | None = None,
                     entry_root: str | None = None) -> str:
     """Register a scheduled task via COM. delete_after_run self-deletes at
-    expires_at (default +24h). Runs as SYSTEM unless run_as_user overrides."""
+    expires_at (default +24h). Runs as SYSTEM unless run_as_user overrides.
+    Paths: prefer forward slashes (JSON-safe). NOTE v6.1 finding: 'interval'
+    triggers fail with a TaskScheduler COM StartBoundary error — register
+    interval/repetition tasks via schtasks /Create /XML instead."""
     payload: dict[str, Any] = {"name": name, "exe": exe, "trigger": trigger,
                                "run_as_user": run_as_user}
     if args is not None:

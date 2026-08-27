@@ -684,6 +684,27 @@ def _shell_wrapper_note(exe: str, args: list[str]) -> str:
             "so job exitCode reflects the real result.")
 
 
+def _composite_arg_note(exe: str, args: list[str]) -> str:
+    """Advisory for the #1 agent quoting mistake: a shell-wrapper invocation
+    whose SINGLE argument carries embedded spaces + internal quotes/redirects
+    (the whole command shoved into one argv element). subprocess passes it as
+    ONE argument; cmd/bash then re-parse it and mangling odds are high. Not an
+    error (legitimate uses exist); a meta note so agents see the hazard."""
+    base = exe.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if base.endswith(".exe"):
+        base = base[:-4]
+    if base not in _SHELL_WRAPPER_EXES:
+        return ""
+    flagged = [a for a in args[1:] if len(a) > 24 and " " in a
+               and any(q in a for q in ('"', "'", "|", ">", ";", "&"))]
+    if not flagged:
+        return ""
+    return ("argv looks like a whole command stuffed into one element "
+            "(spaces + quote/pipe chars). subprocess will hand cmd/bash ONE "
+            "argument and its parser may mangle it; prefer direct-exe + argv "
+            "arrays (v6 design) or split at real boundaries.")
+
+
 def process_run(payload: dict[str, Any]) -> dict[str, Any]:
     exe = _validate_exe(payload.get("exe"))
     args = _validate_args(payload.get("args"))
@@ -699,6 +720,10 @@ def process_run(payload: dict[str, Any]) -> dict[str, Any]:
         timeout_ms=timeout_ms,
         capture_kb=capture_kb,
     )
+    composite_note = _composite_arg_note(exe, args)
+    if composite_note:
+        # surface inside result so it survives the rpc layer's data passthrough
+        result["quotingNote"] = composite_note
     return {"data": result, "stdout_text": result["stdout"],
             "evidence_extra": ["process.run"]}
 
@@ -731,6 +756,9 @@ def process_start(payload: dict[str, Any]) -> dict[str, Any]:
     wrapper_note = _shell_wrapper_note(exe, args)
     if wrapper_note:
         meta["exitCodeNote"] = wrapper_note
+    composite_note = _composite_arg_note(exe, args)
+    if composite_note:
+        meta["quotingNote"] = composite_note
     spec = {
         "meta": meta,
         "exe": exe,

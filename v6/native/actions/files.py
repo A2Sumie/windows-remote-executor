@@ -64,15 +64,48 @@ _PROTECTED_PREFIXES = (
 )
 
 
+def _collapse_bs(s: str) -> str:
+    """Collapse runs of 2+ backslashes to a single one (no regex: escape-proof)."""
+    if "\\\\" not in s:
+        return s
+    out = []
+    prev_bs = False
+    for ch in s:
+        if ch == "\\":
+            if prev_bs:
+                continue  # second+ backslash of a run — skip
+            prev_bs = True
+            out.append(ch)
+        else:
+            prev_bs = False
+            out.append(ch)
+    return "".join(out)
+
+
+
 def _norm(path: str) -> str:
     p = (path or "").strip()
     if not p:
         raise ValueError("path is required")
+    # Agents copy paths from Explorer ("Copy as path" -> "C:\..." with quotes)
+    # or paste with wrapping quotes; strip any symmetric quote pair first.
+    if len(p) >= 2 and p[0] == p[-1] and p[0] in ('"', "'"):
+        p = p[1:-1].strip()
+        if not p:
+            raise ValueError("path is required")
     # //wsl.localhost/<distro>/... (and any other UNC) passes through verbatim:
     # Windows APIs accept forward-slash UNC as-is, and normalizing would risk
     # collapsing the leading double slash.
     if p.startswith("//"):
         return p
+    # Backslash hygiene (agent reality: JSON escaping routinely doubles or
+    # eats backslashes before the string reaches us). Collapse runs of 2+
+    # backslashes to one everywhere EXCEPT a preserved leading pair (UNC
+    # spelled \\\\server\\share keeps its "\\\\" head).
+    if p.startswith("\\\\"):
+        p = "\\\\" + _collapse_bs(p[2:])
+    else:
+        p = _collapse_bs(p)
     # Accept forward slashes (WRE convention) and normalize to OS-native.
     return p.replace("/", os.sep)
 
