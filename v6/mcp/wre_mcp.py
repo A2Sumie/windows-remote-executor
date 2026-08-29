@@ -40,7 +40,23 @@ except ImportError:
 from v6.controller import client as rpc  # noqa: E402
 from v6.controller import targets as tgt  # noqa: E402
 
-mcp = _Server("wre-v6")
+_INSTRUCTIONS = """\
+WRE v6 bridge - Windows hosts X570 (100.119.106.8) and nuc-8-sumie (100.86.160.35).
+Structured arguments only; never shell strings or PowerShell one-liners.
+
+- File search on X570: use wre_find / wre_find_check / wre_find_catchup FIRST
+  (wreq.exe = our Everything-RE MFT engine, D:/H3200, ~2.4M files, instant).
+  Do NOT deep-scan with wre_search / file.search - the bounded walk hits scan
+  caps and returns truncated results.
+- Process model: wre_run (sync) or wre_start + wre_wait/wre_status/wre_kill (jobs).
+- Files: wre_read / wre_write / wre_list / wre_search (bounded walks only).
+- Scheduled tasks: wre_tasks / wre_task_run / wre_task_create (SYSTEM via scheduler).
+- WSL: wre_wsl / wre_wsl_list / wre_wsl_status. Diagnostics: wre_info / wre_probe /
+  wre_guard / wre_help.
+- Full protocol + elevation boundary: workspace skill `wre` and v6/V6.md.
+"""
+
+mcp = _Server("wre-v6", instructions=_INSTRUCTIONS)
 
 _sessions: dict[tuple[str, str], rpc.Session] = {}
 
