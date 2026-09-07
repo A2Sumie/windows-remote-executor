@@ -17,7 +17,6 @@ tool at a sidecar tree (e.g. C:/WRE/wre6).
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -53,6 +52,14 @@ Structured arguments only; never shell strings or PowerShell one-liners.
 - Scheduled tasks: wre_tasks / wre_task_run / wre_task_create (SYSTEM via scheduler).
 - WSL: wre_wsl / wre_wsl_list / wre_wsl_status. Diagnostics: wre_info / wre_probe /
   wre_guard / wre_help.
+- Failure semantics: {"error":"transport"} means the ssh session broke (Mac sleep,
+  host reboot, tailscale flap). The bridge auto-reconnects once per call, so RETRY
+  once before concluding anything. Persistent failure: run wre_info as a preflight;
+  quick ops carry a default deadline so a wedged peer fails in seconds, not 10 min.
+- wre MCP missing from the tool catalog? Hot-reconnect, no opencode restart:
+  opencode2 api post '/api/mcp/wre/disconnect?location%5Bdirectory%5D=<absdir>' then
+  the same for /connect. CLI fallback from the repo root:
+  PYTHONPATH=. python3 -m v6.controller.shell <target> <action> '<json>'.
 - Full protocol + elevation boundary: workspace skill `wre` and v6/V6.md.
 """
 
@@ -65,7 +72,12 @@ def _session(target_name: str, entry_root: str | None) -> rpc.Session:
     key = (target_name, rpc.resolve_entry_root(entry_root))
     sess = _sessions.get(key)
     if sess is None:
-        target = tgt.load_target(target_name)
+        try:
+            target = tgt.load_target(target_name)
+        except Exception as exc:  # unknown target / unreadable env file
+            raise rpc.RpcError(
+                f"cannot load target {target_name!r}: {exc} "
+                "(valid targets: X570, nuc-8-sumie)") from exc
         sess = rpc.Session(target, entry_root=entry_root)
         sess._open()
         _sessions[key] = sess
@@ -78,6 +90,10 @@ def _call(target_name: str, action: str, payload: dict[str, Any],
         call = _session(target_name, entry_root).call(action, payload, timeout_ms=timeout_ms)
     except rpc.RpcError as exc:
         return json.dumps({"error": "transport", "message": str(exc)}, ensure_ascii=False)
+    except Exception as exc:  # noqa: BLE001 - containment: never kill the stdio transport
+        return json.dumps({"error": "internal",
+                           "message": f"{type(exc).__name__}: {exc}"},
+                          ensure_ascii=False)
     if not call.ok:
         return json.dumps({"error": call.error_class, "message": call.message,
                            "didYouMean": call.response.get("didYouMean", "")},
@@ -125,7 +141,11 @@ def wre_start(target: str, exe: str, args: list[str] | None = None,
               cwd: str | None = None, timeout_ms: int | None = None,
               capture_kb: int | None = None, entry_root: str | None = None) -> str:
     """Start an async job; returns {jobId, outputPath}. Output ring-buffers to
-    WRE_ROOT/jobs/<jobId>.log; jobs survive rpc restarts (24h retention)."""
+    WRE_ROOT/jobs/<jobId>.log; jobs survive rpc restarts (24h retention).
+
+    NOTE: never launch a long-lived SERVER via wre_start with timeout_ms set —
+    the supervisor kills the process at timeout (vmcp died 5h44m that way on
+    2026-09-07). For daemons use a scheduled task (wre_task_create) instead."""
     payload: dict[str, Any] = {"exe": exe}
     if args is not None:
         payload["args"] = args
@@ -135,7 +155,7 @@ def wre_start(target: str, exe: str, args: list[str] | None = None,
         payload["timeoutMs"] = timeout_ms
     if capture_kb:
         payload["captureKB"] = capture_kb
-    return _call(target, "process.start", payload, entry_root)
+    return _call(target, "process.start", payload, entry_root, timeout_ms=60_000)
 
 
 @mcp.tool()
@@ -150,14 +170,16 @@ def wre_wait(target: str, job_id: str, timeout_ms: int = 60000,
 @mcp.tool()
 def wre_status(target: str, job_id: str, entry_root: str | None = None) -> str:
     """Job state: running/exited, durationMs, exitCode, outputSizeBytes."""
-    return _call(target, "process.status", {"jobId": job_id}, entry_root)
+    return _call(target, "process.status", {"jobId": job_id}, entry_root,
+                 timeout_ms=30_000)
 
 
 @mcp.tool()
 def wre_kill(target: str, job_id: str, force: bool = False,
              entry_root: str | None = None) -> str:
     """Terminate a job; force=True kills the whole process tree."""
-    return _call(target, "process.kill", {"jobId": job_id, "force": force}, entry_root)
+    return _call(target, "process.kill", {"jobId": job_id, "force": force}, entry_root,
+                 timeout_ms=30_000)
 
 
 # ---------- wsl ----------
@@ -213,14 +235,15 @@ def wre_read(target: str, path: str, offset: int | None = None,
         payload["tail"] = tail
     if max_bytes:
         payload["maxBytes"] = max_bytes
-    return _call(target, "file.readText", payload, entry_root)
+    return _call(target, "file.readText", payload, entry_root, timeout_ms=60_000)
 
 
 @mcp.tool()
 def wre_write(target: str, path: str, text: str,
               entry_root: str | None = None) -> str:
     """Atomic UTF-8 write (tmp+replace); returns a sha256 proof."""
-    return _call(target, "file.writeText", {"path": path, "text": text}, entry_root)
+    return _call(target, "file.writeText", {"path": path, "text": text}, entry_root,
+                 timeout_ms=60_000)
 
 
 @mcp.tool()
@@ -229,7 +252,7 @@ def wre_list(target: str, path: str, pattern: str = "*", recursive: bool = False
     """Directory listing with glob pattern."""
     return _call(target, "file.list", {"path": path, "pattern": pattern,
                                        "recursive": recursive, "maxEntries": max_entries},
-                 entry_root)
+                 entry_root, timeout_ms=60_000)
 
 
 @mcp.tool()
@@ -265,7 +288,7 @@ def wre_tasks(target: str, prefix: str | None = None, verbose: bool = False,
 @mcp.tool()
 def wre_task_run(target: str, name: str, entry_root: str | None = None) -> str:
     """Trigger a scheduled task now (SYSTEM lane; leaves an audit trail)."""
-    return _call(target, "host.task.run", {"name": name}, entry_root)
+    return _call(target, "host.task.run", {"name": name}, entry_root, timeout_ms=30_000)
 
 
 @mcp.tool()
@@ -298,7 +321,7 @@ def wre_task_create(target: str, name: str, exe: str,
 @mcp.tool()
 def wre_info(target: str, entry_root: str | None = None) -> str:
     """Cheap pre-flight self-check: whoami/protocol/build/policy/uptime."""
-    return _call(target, "host.info", {}, entry_root)
+    return _call(target, "host.info", {}, entry_root, timeout_ms=30_000)
 
 
 @mcp.tool()
@@ -320,7 +343,8 @@ def wre_guard(target: str, entry_root: str | None = None) -> str:
 def wre_help(target: str, action: str | None = None,
              entry_root: str | None = None) -> str:
     """Machine+human docs for one action (or the whole surface)."""
-    return _call(target, "system.help", {"action": action} if action else {}, entry_root)
+    return _call(target, "system.help", {"action": action} if action else {},
+                 entry_root, timeout_ms=30_000)
 
 
 # ---------- wreq: USN-fresh whole-volume file search ----------
