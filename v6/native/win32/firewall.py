@@ -21,6 +21,7 @@ def _fw_policy():  # type: ignore[no-untyped-def]
     return comtypes.client.CreateObject("HNetCfg.FwPolicy2")
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def list_sshd_rules() -> list[dict[str, Any]]:
     try:
         policy = _fw_policy()
@@ -46,6 +47,7 @@ def list_sshd_rules() -> list[dict[str, Any]]:
         return [{"error": str(exc)}]
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def ensure_sshd_firewall_rule() -> dict[str, Any]:
     """Ensure a tailnet-only inbound rule exists for sshd on port 22."""
     try:

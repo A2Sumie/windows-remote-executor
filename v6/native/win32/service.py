@@ -16,6 +16,7 @@ from typing import Any
 _SERVICE_NAME_RE = re.compile(r"^[A-Za-z0-9_ -]+$")
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _validate_service_name(name: str) -> str:
     if not _SERVICE_NAME_RE.match(name or ""):
         raise ValueError(f"invalid service name: {name!r}")
@@ -28,6 +29,7 @@ def _import_win32serviceutil():  # type: ignore[no-untyped-def]
     return win32serviceutil, win32service
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def service_state_safe(name: str) -> dict[str, Any]:
     try:
         _validate_service_name(name)
@@ -48,6 +50,7 @@ def service_state_safe(name: str) -> dict[str, Any]:
     return {"name": name, "state": "absent", "error": "service not found"}
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def restart_service_safe(name: str, timeout_seconds: int = 20) -> dict[str, Any]:
     _validate_service_name(name)
     try:

@@ -19,7 +19,29 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-TARGETS_DIR = Path(__file__).resolve().parent.parent.parent / "windows-remote-executor" / "targets"
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+V6_TARGETS_DIR = Path(__file__).resolve().parent.parent / "targets"
+LEGACY_V3_TARGETS_DIR = _REPO_ROOT / "windows-remote-executor" / "targets"
+
+
+def _resolve_targets_dir() -> Path:
+    """Resolution chain (de-parasitized 2026-09-16, QC-WRE DEBT):
+
+    1. ``$WRE_TARGETS_DIR`` — explicit operator override.
+    2. ``v6/targets/`` — canonical home of the .env files (migrated from v3).
+    3. legacy ``windows-remote-executor/targets/`` — the v3 tree graduated
+       (was removed) on 2026-09-16; this code-level fallback is retained for
+       one release cycle, then drop this branch.
+    """
+    env = os.environ.get("WRE_TARGETS_DIR")
+    if env and Path(env).is_dir():
+        return Path(env)
+    if V6_TARGETS_DIR.is_dir():
+        return V6_TARGETS_DIR
+    return LEGACY_V3_TARGETS_DIR
+
+
+TARGETS_DIR = _resolve_targets_dir()
 
 
 @dataclass
@@ -91,6 +113,8 @@ def parse_env_file(path: Path) -> dict[str, str]:
         if len(parts) != 1 or "=" not in parts[0]:
             continue
         key, value = parts[0].split("=", 1)
+        if not key:
+            continue  # "=orphan" lines carry no key
         values[key] = value
     return values
 

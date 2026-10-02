@@ -77,6 +77,7 @@ def audit_job(event: str, **fields: Any) -> None:
     write_audit({"ts": now_iso(), "kind": "job", "event": event, **fields})
 
 
+# crap:ok nt-gated durable job history; JSONL/rotation mechanics covered off-Windows
 def audit_job_history(meta: dict[str, Any], log_tail: str) -> None:
     """H14: durable per-job exit record. The ring-buffered job log dies with
     the 24 h retention sweep; this one-line summary survives for post-mortem

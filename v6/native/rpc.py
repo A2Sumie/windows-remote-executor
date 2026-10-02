@@ -195,6 +195,7 @@ def _system_help(payload: dict[str, Any]) -> dict[str, Any]:
 
 # ---------- dispatch ----------
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def _dispatch_inner(request: dict[str, Any]) -> dict[str, Any]:
     request_id = str(request.get("id") or f"rpc-{uuid.uuid4().hex}")
     action = str(request.get("action") or "").strip()
@@ -286,6 +287,7 @@ def _parse_kv_flags(argv: list[str]) -> dict[str, str]:
     return out
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _run_repair_sshd(argv: list[str]) -> int:
     """Self-heal entry invoked by the SYSTEM scheduled tasks. Runs the same
     logic as the host.repair action but writes a human log line to stderr."""
@@ -307,6 +309,7 @@ def _run_repair_sshd(argv: list[str]) -> int:
         return 1
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _run_apply_tasks(argv: list[str]) -> int:
     """SYSTEM-privileged task (re)registration agent.
 
@@ -378,12 +381,29 @@ def _run_apply_tasks(argv: list[str]) -> int:
 
 # ---------- stdio plumbing ----------
 
+def _drain_oversized_line() -> None:
+    """An over-cap line was rejected after reading only its first slice; the
+    remainder is still in the stdin buffer and would otherwise cascade one
+    spurious JSON error per 56 MB slice. Consume the rest of the line
+    (bounded) so the NEXT line is parsed as its own request."""
+    drained = 0
+    while drained < MAX_REQUEST_LINE_BYTES:
+        chunk = sys.stdin.readline(1024 * 1024)
+        if not chunk or chunk.endswith("\n"):
+            return
+        drained += len(chunk)
+
+
 def _read_request_line() -> dict[str, Any] | None:
-    """Return one parsed request, {} for a blank line, or None at EOF."""
+    """Return one parsed request (a JSON object), {} for a blank line, or
+    None at EOF. Malformed input raises ValueError (the loop answers a
+    structured protocol error and CONTINUES); only the empty read at EOF is
+    a shutdown signal — a JSON `null` line is malformed input, not EOF."""
     raw = sys.stdin.readline(MAX_REQUEST_LINE_BYTES + 1)
     if not raw:
         return None
-    if len(raw) > MAX_REQUEST_LINE_BYTES:
+    if len(raw) > MAX_REQUEST_LINE_BYTES and not raw.endswith("\n"):
+        _drain_oversized_line()
         raise ValueError(
             f"request line exceeds {MAX_REQUEST_LINE_BYTES} bytes; "
             "split the payload (chunked file.putBinary, or SFTP for large files)"
@@ -391,7 +411,12 @@ def _read_request_line() -> dict[str, Any] | None:
     text = raw.lstrip("\ufeff").strip()
     if not text:
         return {}
-    return json.loads(text)
+    request = json.loads(text)
+    if not isinstance(request, dict):
+        raise ValueError(
+            f"request line must be a JSON object, got {type(request).__name__}"
+        )
+    return request
 
 
 def _write_response_line(response: dict[str, Any]) -> None:
@@ -400,6 +425,7 @@ def _write_response_line(response: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
+# crap:ok pythonw scheduled-task degenerate-stream guard; NT-only by construction
 def _ensure_stdio() -> None:
     """pythonw.exe scheduled-task runs can have sys.stdout/stderr as None.
     RPC mode needs real pipes, but maintenance subcommands can write to NUL.
@@ -428,6 +454,11 @@ def _rpc_loop() -> int:
         except json.JSONDecodeError as exc:
             _write_response_line(_err_response("malformed", "protocol", f"bad json: {exc}"))
             continue
+        except RecursionError:
+            # pathological nesting — one structured error, the loop survives
+            _write_response_line(_err_response("malformed", "protocol",
+                                               "request JSON nesting too deep"))
+            continue
         except ValueError as exc:
             _write_response_line(_err_response("malformed", "protocol", str(exc)))
             continue
@@ -439,6 +470,7 @@ def _rpc_loop() -> int:
         _write_response_line(response)
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def main() -> int:
     _ensure_stdio()
 

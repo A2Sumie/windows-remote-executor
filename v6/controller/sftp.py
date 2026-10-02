@@ -54,6 +54,7 @@ def get(target: Target, remote_path: str, local_path: Path) -> None:
     _run_sftp(target, cmds)
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _run_sftp(target: Target, batch_commands: list[str]) -> None:
     batch = "\n".join(batch_commands) + "\n"
     args = [

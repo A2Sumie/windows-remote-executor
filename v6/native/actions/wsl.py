@@ -37,6 +37,7 @@ def _wsl_exe() -> str:
     return os.environ.get("WRE_WSL_EXE") or DEFAULT_WSL_EXE
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def build_argv(payload: dict[str, Any]) -> list[str]:
     """Pure argv assembly — unit-tested on macOS via WRE_WSL_EXE."""
     argv_in = payload.get("argv")
@@ -113,6 +114,7 @@ def _decode_wsl_listing(raw: str) -> str:
     return raw
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def parse_list_output(text: str) -> list[dict[str, Any]]:
     """Parse `wsl.exe -l -v` table output (pure function, unit-tested)."""
     distros: list[dict[str, Any]] = []

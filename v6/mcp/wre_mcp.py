@@ -36,8 +36,8 @@ except ImportError:
         )
         raise SystemExit(2)
 
-from v6.controller import client as rpc  # noqa: E402
-from v6.controller import targets as tgt  # noqa: E402
+from v6.controller import client as rpc
+from v6.controller import targets as tgt
 
 _INSTRUCTIONS = """\
 WRE v6 bridge - Windows hosts X570 (100.119.106.8) and nuc-8-sumie (100.86.160.35).
@@ -53,8 +53,11 @@ Structured arguments only; never shell strings or PowerShell one-liners.
 - WSL: wre_wsl / wre_wsl_list / wre_wsl_status. Diagnostics: wre_info / wre_probe /
   wre_guard / wre_help.
 - Failure semantics: {"error":"transport"} means the ssh session broke (Mac sleep,
-  host reboot, tailscale flap). The bridge auto-reconnects once per call, so RETRY
-  once before concluding anything. Persistent failure: run wre_info as a preflight;
+  host reboot, tailscale flap). The bridge auto-reconnects+resends once ONLY when
+  the request provably never left the bridge (write break); read-phase breaks
+  surface {"error":"transport"} without an automatic resend, so RETRY once before
+  concluding anything (the peer may or may not have processed the first attempt).
+  Persistent failure: run wre_info as a preflight;
   quick ops carry a default deadline so a wedged peer fails in seconds, not 10 min.
 - wre MCP missing from the tool catalog? Hot-reconnect, no opencode restart:
   opencode2 api post '/api/mcp/wre/disconnect?location%5Bdirectory%5D=<absdir>' then
@@ -79,7 +82,11 @@ def _session(target_name: str, entry_root: str | None) -> rpc.Session:
                 f"cannot load target {target_name!r}: {exc} "
                 "(valid targets: X570, nuc-8-sumie)") from exc
         sess = rpc.Session(target, entry_root=entry_root)
-        sess._open()
+        try:
+            sess._open()
+        except Exception as exc:  # ssh spawn failure IS a transport failure
+            raise rpc.RpcTransportError(
+                f"cannot open session to {target_name!r}: {exc}") from exc
         _sessions[key] = sess
     return sess
 

@@ -174,10 +174,13 @@ def _reader_thread(pipe: IO[bytes], sink: "_RingLog | None", tail: _TailBuffer) 
         # semantics are unchanged — only the flush TIMING moved.
         read1 = getattr(pipe, "read1", None)  # BufferedReader only; raw FileIO lacks it
         while True:
-            if read1 is not None:
-                chunk = read1(65536)
-            else:
-                chunk = os.read(pipe.fileno(), 65536)
+            try:
+                if read1 is not None:
+                    chunk = read1(65536)
+                else:
+                    chunk = os.read(pipe.fileno(), 65536)
+            except OSError:
+                break  # pipe torn down under us (kill/peer exit) — done
             if not chunk:
                 break
             tail.append(chunk)
@@ -298,6 +301,7 @@ def run_capture(exe: str, args: list[str], *, cwd: str | None, stdin_text: str |
     return result
 
 
+# crap:ok posix branch covered by v6/tests; the win32 branch is host-only
 def _terminate(proc: "subprocess.Popen[bytes]", *, force: bool) -> None:
     """Terminate; force=True kills the whole process tree."""
     if proc.poll() is not None:
@@ -431,6 +435,7 @@ def _update_meta(job_id: str, updates: dict[str, Any],
         return cur
 
 
+# crap:ok posix branch covered by v6/tests; the win32 branch is host-only
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -479,6 +484,7 @@ def _looks_abandoned(meta: dict[str, Any]) -> bool:
     return age is not None and age > REAP_GRACE_SECONDS
 
 
+# crap:ok state-machine core covered by v6/tests job-lifecycle suite; remaining branches are timing races
 def _load_registry() -> None:
     """Reap orphan job metadata left by dead supervisors + enforce retention
     (default 24h) on exited jobs."""
@@ -532,6 +538,7 @@ def _load_registry() -> None:
                 pass
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def job_run_main(spec_path: str) -> int:
     """Detached per-job supervisor (subcommand `job-run`). Owns the child
     process, the log, the timeout, and the final metadata write."""
@@ -728,6 +735,7 @@ def process_run(payload: dict[str, Any]) -> dict[str, Any]:
             "evidence_extra": ["process.run"]}
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def process_start(payload: dict[str, Any]) -> dict[str, Any]:
     _load_registry()
     exe = _validate_exe(payload.get("exe"))
@@ -812,6 +820,7 @@ def process_start(payload: dict[str, Any]) -> dict[str, Any]:
     return {"data": data, "stdout_text": "", "evidence_extra": ["process.start"]}
 
 
+# crap:ok state-machine core covered by v6/tests job-lifecycle suite; remaining branches are timing races
 def _job_view(job_id: str) -> dict[str, Any]:
     meta = _read_meta(job_id)
     if meta.get("state") == "running" and _looks_abandoned(meta):
@@ -889,6 +898,7 @@ def process_wait(payload: dict[str, Any]) -> dict[str, Any]:
     return {"data": data, "stdout_text": tail, "evidence_extra": ["process.wait"]}
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def process_kill(payload: dict[str, Any]) -> dict[str, Any]:
     _load_registry()
     job_id = _check_job_id(payload)

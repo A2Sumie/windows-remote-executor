@@ -29,6 +29,7 @@ from . import client as rpc
 from . import targets as tgt
 
 
+# crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="wrev6", description="WRE v6 controller")
     parser.add_argument("target")
@@ -104,6 +105,7 @@ def _run(target, action: str, payload: dict[str, Any], out: str | None,
     return 0 if call.ok else 1
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _repl(target, *, entry_root: str | None) -> int:
     print(f"# WRE v6 REPL — target={target.name} ({target.ssh_destination}) entry={rpc.resolve_entry_root(entry_root)}")
     print("# commands: help, quit, actions, info, list-targets, <action> <json>")

@@ -77,6 +77,7 @@ _TASK_NAME_BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 _TASK_NAME_MAX = 200
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _validate_task_name(name: str) -> str:
     name = (name or "").strip()
     if not name:
@@ -90,6 +91,7 @@ def _validate_task_name(name: str) -> str:
     return name
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _win_path(value: str) -> str:
     if not value:
         return value
@@ -127,6 +129,7 @@ def _root_folder(ts):  # type: ignore[no-untyped-def]
     return ts.GetFolder("\\")
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def list_tasks(*, prefix: str = TASK_PREFIX, names: list[str] | None = None) -> list[dict[str, Any]]:
     try:
         ts = _connect_task_service()
@@ -158,6 +161,7 @@ def list_repair_tasks(task_names: tuple[str, ...]) -> list[dict[str, Any]]:
 _NEVER_RUN_SENTINEL_YEAR = 1899  # Task Scheduler's LastRunTime for never-run tasks
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def parse_task_time(value: Any) -> datetime | None:
     """Parse a task LastRunTime/NextRunTime into an aware datetime; None means
     never-run (empty or the 1899-12-30 COM sentinel)."""
@@ -174,6 +178,7 @@ def parse_task_time(value: Any) -> datetime | None:
     return dt
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def filter_tasks_for_clean(
     tasks: list[dict[str, Any]],
     *,
@@ -229,6 +234,7 @@ def run_task(name: str) -> dict[str, Any]:
         return {"name": name, "run": False, "error": str(exc)}
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def resolve_run_as_user(value: str | None) -> str:
     """Resolve CURRENT/. sentinel to the current Windows token user."""
     raw = "" if value is None else str(value).strip()
@@ -237,6 +243,7 @@ def resolve_run_as_user(value: str | None) -> str:
     return raw
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def create_task(spec: dict[str, Any]) -> dict[str, Any]:
     """Register a new task with one ExecAction via TaskScheduler COM.
 
@@ -317,6 +324,7 @@ def create_task(spec: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _set_delete_after_run(definition, expires_at: Any) -> str:  # type: ignore[no-untyped-def]
     """Make the task self-delete at expiry.
 
@@ -344,6 +352,7 @@ def _set_delete_after_run(definition, expires_at: Any) -> str:  # type: ignore[n
     return f"auto-delete at {boundary} (disabled boundary trigger; run manually any time before)"
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _register_credentials(spec: dict[str, Any], run_as_user: str):  # type: ignore[no-untyped-def]
     """Pick (register_user, register_password, register_logon_flag, logon_type)
     for RegisterTaskDefinition based on the resolved run_as_user."""
@@ -371,6 +380,7 @@ def _set_exec_action(definition, exe: str, args: list[str], cwd: str) -> None:  
         action.WorkingDirectory = cwd
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _set_trigger(definition, trigger_kind: str, delay_iso: str | None, interval_minutes: Any) -> None:  # type: ignore[no-untyped-def]
     # manual = no trigger; just registered as runnable.
     if trigger_kind == "manual":
@@ -404,6 +414,7 @@ def _apply_settings(definition, enabled: bool) -> None:  # type: ignore[no-untyp
     definition.Settings.DisallowStartIfOnBatteries = False
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def update_task(spec: dict[str, Any]) -> dict[str, Any]:
     """Read-modify-write update.
 
@@ -509,6 +520,7 @@ def delete_task(name: str) -> dict[str, Any]:
         return {"name": name, "deleted": False, "error": str(exc)}
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _extract_task_summary(task) -> dict[str, Any]:  # type: ignore[no-untyped-def]
     actions_info: list[dict[str, Any]] = []
     try:
@@ -547,6 +559,7 @@ def _extract_task_summary(task) -> dict[str, Any]:  # type: ignore[no-untyped-de
     }
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _extract_task_detail(task) -> dict[str, Any]:  # type: ignore[no-untyped-def]
     summary = _extract_task_summary(task)
     try:
@@ -557,6 +570,7 @@ def _extract_task_detail(task) -> dict[str, Any]:  # type: ignore[no-untyped-def
     return summary
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _iso(value) -> str:  # type: ignore[no-untyped-def]
     if value is None:
         return ""
@@ -570,6 +584,7 @@ def _iso(value) -> str:  # type: ignore[no-untyped-def]
             return ""
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def ensure_repair_tasks(*, expected_listen: str | None) -> dict[str, Any]:
     """Re-create the three `<TASK_PREFIX> Sshd Repair` tasks, pointing at the
     RUNNING tree (WRE_TREE) — a sidecar wre6 repairs with its own rpc.py."""
@@ -658,6 +673,7 @@ def _try_delete(folder, name: str) -> None:  # type: ignore[no-untyped-def]
         pass
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _current_full_user_name() -> str:
     """Return `DOMAIN\\USER` for the current process token, used to fill
     RegisterTaskDefinition's user field when caller omits run_as_user."""

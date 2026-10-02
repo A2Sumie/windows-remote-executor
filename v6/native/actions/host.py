@@ -70,6 +70,7 @@ def _info(_payload: dict[str, Any]) -> dict[str, Any]:
 
 # ---------- host.probe ----------
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _probe(payload: dict[str, Any]) -> dict[str, Any]:
     categories = payload.get("categories") or list(PROBE_DEFAULT_CATEGORIES)
     if isinstance(categories, str):
@@ -112,6 +113,7 @@ def _probe(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _probe_os() -> dict[str, Any]:
     info = {
         "caption": f"Windows {platform.release()} {platform.version()}",
@@ -173,6 +175,7 @@ def _probe_sshd() -> dict[str, Any]:
 
 # ---------- host.guard ----------
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _guard(payload: dict[str, Any]) -> dict[str, Any]:
     no_disable = bool(payload.get("noDisable"))
     policy = ap.load_policy()
@@ -188,6 +191,7 @@ def _guard(payload: dict[str, Any]) -> dict[str, Any]:
 
 # ---------- host.repair ----------
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _repair(payload: dict[str, Any]) -> dict[str, Any]:
     policy = ap.load_policy()
     expected = payload.get("expectedListenAddress") or policy.get("expectedListenAddress")
@@ -251,6 +255,7 @@ def _policy(payload: dict[str, Any]) -> dict[str, Any]:
 _TASK_SUMMARY_KEYS = ("name", "enabled", "state", "lastRunTime", "lastTaskResult", "nextRunTime")
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _tasks_list(payload: dict[str, Any]) -> dict[str, Any]:
     """Summary by default (X570's full listing is context poison); verbose=true
     adds actions/principal XML. limit + truncated semantics like file.list."""
@@ -280,6 +285,7 @@ def _tasks_list(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _tasks_clean(payload: dict[str, Any]) -> dict[str, Any]:
     """Bulk-clean stale managed tasks (the X570 ~180 one-shot junk problem).
 

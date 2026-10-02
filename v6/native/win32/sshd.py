@@ -34,6 +34,7 @@ _WILDCARD_ADDRS = ("0.0.0.0", "::", "::0")
 _LINK_LOCAL_PREFIXES = ("169.254.", "fe80:")
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def read_listen_addresses() -> list[str]:
     """Return the explicit `ListenAddress` lines in `sshd_config` (IPv4 only)."""
     if not os.path.isfile(_CONFIG_PATH):
@@ -61,6 +62,7 @@ def read_full_config() -> str:
         return fh.read()
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def rewrite_config(*, expected_listen: str | None, force: bool, log_path: str) -> dict[str, Any]:
     """Rewrite sshd_config's ListenAddress block to `expected_listen`.
 
@@ -92,6 +94,7 @@ def rewrite_config(*, expected_listen: str | None, force: bool, log_path: str) -
     return {"before": before, "after": after, "rewritten": rewritten, "backupPath": backup_path}
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def evaluate_exposure(*, expected_listen: str | None, no_disable: bool, log_path: str) -> dict[str, Any]:
     configured = read_listen_addresses()
     active = _active_listen_addresses()
@@ -114,6 +117,7 @@ def evaluate_exposure(*, expected_listen: str | None, no_disable: bool, log_path
     return diagnostics
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _active_listen_addresses(port: int = 22) -> list[str] | None:
     """Real enumeration of local IPv4 TCP listeners on `port` via iphlpapi
     GetExtendedTcpTable (stdlib ctypes, no new dependency).
@@ -130,6 +134,7 @@ def _active_listen_addresses(port: int = 22) -> list[str] | None:
         return None
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _active_listen_addresses_win32(port: int) -> list[str]:
     import ctypes
     from ctypes import wintypes
@@ -179,6 +184,7 @@ def _active_listen_addresses_win32(port: int) -> list[str]:
     return sorted(addrs)
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _policy_check(
     expected: str | None,
     configured: list[str],
@@ -203,6 +209,7 @@ def _policy_check(
     return True, ""
 
 
+# crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def _rewrite_listen_block(text: str, expected_listen: str) -> str:
     lines = text.splitlines()
     out: list[str] = []

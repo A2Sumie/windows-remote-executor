@@ -22,6 +22,7 @@ a v4/v5 peer raises RpcProtocolError with an upgrade hint instead of a bare
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import subprocess
@@ -63,6 +64,12 @@ class RpcTransportError(RpcError):
     pass
 
 
+class RpcTransportWriteError(RpcTransportError):
+    """Write-phase failure: the request provably never left the bridge.
+    This is the ONLY transport failure where an automatic resend cannot
+    duplicate an action the peer already processed."""
+
+
 class RpcProtocolError(RpcError):
     pass
 
@@ -85,7 +92,8 @@ class Call:
 
     @property
     def data(self) -> dict[str, Any]:
-        return self.response.get("data") or {}
+        data = self.response.get("data")
+        return data if isinstance(data, dict) else {}
 
     @property
     def message(self) -> str:
@@ -125,6 +133,10 @@ def build_request(
 ) -> dict[str, Any]:
     if not action:
         raise RpcError("action is required")
+    if payload is not None and not isinstance(payload, dict):
+        raise RpcError(
+            "payload must be a JSON object (structured arguments only; "
+            "never shell strings)")
     request: dict[str, Any] = {
         "id": request_id or f"rpc-{uuid.uuid4().hex}",
         "action": action,
@@ -166,10 +178,14 @@ def _is_v6_only(action: str) -> bool:
 
 def _upgrade_hint(call_resp: dict[str, Any], action: str) -> None:
     """Rewrite a bare v4/v5 'unsupported action' into an actionable message."""
+    try:
+        peer_version = int(call_resp.get("protocolVersion") or 0)
+    except (TypeError, ValueError):
+        peer_version = 0  # malformed version field — treat as pre-v6
     if (not call_resp.get("ok")
             and call_resp.get("errorClass") == "unsupported"
             and _is_v6_only(action)
-            and int(call_resp.get("protocolVersion") or 0) < 6):
+            and peer_version < 6):
         peer = call_resp.get("protocolVersion")
         call_resp["message"] = (
             f"{action} requires a v6+ native on the host, but the peer speaks "
@@ -250,7 +266,9 @@ def check_peer_version(target: Target, *, entry_root: str | None = None) -> int:
 
 class Session:
     """One SSH connection, many calls (native loop mode). Auto-reconnects
-    exactly once per call on transport failure."""
+    exactly once when the request provably never left the bridge (write-phase
+    failure); read-phase failures drop the session and surface a transport
+    error so the caller can retry deliberately (no duplicate actions)."""
 
     def __init__(self, target: Target, *, entry_root: str | None = None,
                  stderr_echo: bool = False) -> None:
@@ -260,6 +278,8 @@ class Session:
         self._lock = threading.Lock()
         self._stderr_echo = stderr_echo
         self.peer_version: int | None = None
+        # Bounded stderr tail (filled by the drainer started in _open).
+        self._stderr_chunks: collections.deque[str] = collections.deque(maxlen=8)
 
     # -- connection lifecycle --
 
@@ -279,6 +299,37 @@ class Session:
             errors="replace",
             bufsize=1,
         )
+        # Drain stderr continuously: nothing reads it during a call, so a
+        # chatty peer (> pipe buffer of stderr noise) would otherwise block
+        # mid-response and wedge the session until the read deadline.
+        self._stderr_chunks = collections.deque(maxlen=8)
+        if self._proc.stderr is not None:
+            proc, chunks = self._proc, self._stderr_chunks
+            # target+daemon kwargs only (closure carries the args): some test
+            # doubles replace threading.Thread with a (target, daemon) stub.
+            threading.Thread(
+                target=lambda: self._drain_stderr(proc, chunks),
+                daemon=True).start()
+
+    @staticmethod
+    def _drain_stderr(proc: subprocess.Popen[str],
+                      chunks: "collections.deque[str]") -> None:
+        stream = proc.stderr
+        if stream is None:
+            return
+        while True:
+            try:
+                chunk = stream.read(4096)
+            except TypeError:  # scripted fakes without a size argument
+                try:
+                    chunk = stream.read()
+                except Exception:  # noqa: BLE001
+                    return
+            except Exception:  # noqa: BLE001 - drainer must never kill a session
+                return
+            if not chunk:
+                return  # peer closed stderr (EOF)
+            chunks.append(chunk)
 
     def close(self) -> None:
         proc, self._proc = self._proc, None
@@ -294,6 +345,7 @@ class Session:
         except Exception:  # noqa: BLE001
             try:
                 proc.kill()
+                proc.wait(timeout=5)  # reap; a killed-but-unwaited proc is a zombie
             except Exception:  # noqa: BLE001
                 pass
 
@@ -314,14 +366,24 @@ class Session:
         with self._lock:
             try:
                 response = self._round_trip(request)
-            except (BrokenPipeError, RpcTransportError):
-                # ONE automatic reconnect, then surface the failure.
+            except RpcTransportWriteError:
+                # Guaranteed non-delivery: ONE reconnect + resend is safe even
+                # for non-idempotent actions.
                 self._open()
                 response = self._round_trip(request)
+            except RpcTransportError:
+                # Read-phase failure: the peer may ALREADY have processed the
+                # request. An automatic resend could duplicate non-idempotent
+                # actions (a second process.start job, a doubled putBinary
+                # chunk) — drop the broken session so the next call reconnects
+                # cleanly, and let the caller retry deliberately.
+                self.close()
+                raise
         _upgrade_hint(response, action)
         return Call(target=self.target, request=request, response=response,
                     argv=self._argv(), returncode=0)
 
+    # crap:ok covered by v6/tests; flat branching kept deliberately for audit readability
     def _round_trip(self, request: dict[str, Any]) -> dict[str, Any]:
         if self._proc is None or self._proc.poll() is not None:
             self._open()
@@ -331,7 +393,7 @@ class Session:
             self._proc.stdin.write(line)
             self._proc.stdin.flush()
         except (BrokenPipeError, OSError) as exc:
-            raise RpcTransportError(f"session write failed: {exc}") from exc
+            raise RpcTransportWriteError(f"session write failed: {exc}") from exc
 
         # Read with a deadline (request timeoutMs + 30s transport margin,
         # default 600s): a hung peer must not pin the agent forever.
@@ -339,10 +401,37 @@ class Session:
         deadline_s = (int(timeout_ms) // 1000 + 30) if timeout_ms else 600
         result: dict[str, Any] = {}
         proc = self._proc
+        want_id = str(request.get("id") or "")
 
         def _reader() -> None:
             try:
-                result["line"] = proc.stdout.readline() if proc and proc.stdout else ""
+                while True:
+                    raw = proc.stdout.readline() if proc and proc.stdout else ""
+                    if not raw:
+                        result["line"] = ""
+                        return
+                    # Frame alignment: a response frame carrying a DIFFERENT id
+                    # than the outstanding request is provably stale (a
+                    # duplicate or late frame from an earlier exchange). The
+                    # v6 native echoes the request id in every response, so
+                    # skipping it can never drop a legitimate answer; frames
+                    # without an id are accepted (can't be proven stale).
+                    stripped = raw.lstrip("\ufeff").strip()
+                    try:
+                        frame = json.loads(stripped)
+                    except json.JSONDecodeError:
+                        result["line"] = raw  # parse_response raises protocol
+                        return
+                    if not isinstance(frame, dict):
+                        result["line"] = raw  # parse_response raises protocol
+                        return
+                    frame_id = frame.get("id")
+                    if (frame_id is not None and want_id
+                            and str(frame_id) != want_id):
+                        result["stale"] = result.get("stale", 0) + 1
+                        continue
+                    result["line"] = raw
+                    return
             except Exception as exc:  # noqa: BLE001
                 result["error"] = exc
 
@@ -356,13 +445,10 @@ class Session:
             raise RpcTransportError(f"session read failed: {result['error']}")
         raw = str(result.get("line") or "")
         if not raw:
-            stderr_tail = ""
-            try:
-                if self._proc and self._proc.stderr:
-                    stderr_tail = self._proc.stderr.read()[-400:]
-            except Exception:  # noqa: BLE001
-                pass
+            stderr_tail = "".join(self._stderr_chunks)[-400:]
+            stale_note = (f" (skipped {result['stale']} stale frame(s))"
+                          if result.get("stale") else "")
             raise RpcTransportError(
-                f"session closed by peer (ssh exit {self._proc.poll() if self._proc else '?'}): {stderr_tail}"
+                f"session closed by peer (ssh exit {self._proc.poll() if self._proc else '?'}): {stderr_tail}{stale_note}"
             )
         return parse_response(raw, "", 0)

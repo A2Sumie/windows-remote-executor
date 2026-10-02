@@ -17,8 +17,7 @@ Token resolution order (first hit wins; NO source => ABORT, v6 never
 assembles a null-token policy):
   a. --access-token <plain> (hashed locally)
   b. TARGET_ACCESS_TOKEN in the target .env file (hashed locally)
-  c. existing v3 access-policy.json (read via the v3 bridge)
-  d. live policy at <entry-root>/access-policy.json (SFTP GET)
+  c. live policy at <entry-root>/access-policy.json (SFTP GET)
 
 When this script returns, point the controller at the entry root:
     WRE_ENTRY=C:/WRE/wre6 python3 -m v6.controller.shell X570 --info
@@ -38,24 +37,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent.parent))
-sys.path.insert(0, str(HERE.parent.parent / "windows-remote-executor" / "lib"))
 
 from v6.controller import sftp, targets  # noqa: E402
-
-# LEGACY v3 path on the live fleet — do not rebrand; the v3 tree still
-# physically lives at C:/CodexRemote/tools/ on X570.
-V3_TOOLS_POLICY = "C:/CodexRemote/tools/access-policy.json"
-
-
-def _load_v3_policy_via_v3_client(target) -> dict:
-    """Read the existing v3 access-policy.json using v3 native."""
-    import win_remote_cli as cli  # type: ignore
-    import wre_v3_client as v3  # type: ignore
-    v3_target = cli.load_target(target.name)
-    call = v3.call_rpc(v3_target, "file.readText", {"path": V3_TOOLS_POLICY, "maxBytes": 8000})
-    if not call.ok:
-        raise RuntimeError(f"cannot read v3 access-policy.json: {call.stderr_text or call.response.get('errorClass')}")
-    return json.loads(call.response.get("stdoutText") or "{}")
 
 
 def _load_live_policy_via_sftp(target, policy_path: str) -> dict:
@@ -75,15 +58,6 @@ def _resolve_token_sha(target, access_token: str | None, policy_path: str) -> tu
             "TARGET_ACCESS_TOKEN from target env file"
 
     errors: list[str] = []
-    try:
-        v3_policy = _load_v3_policy_via_v3_client(target)
-        sha = v3_policy.get("accessTokenSha256")
-        if sha:
-            return str(sha), "v3 access-policy.json"
-        errors.append("v3 policy readable but accessTokenSha256 is null")
-    except Exception as exc:  # noqa: BLE001
-        errors.append(f"v3 policy read failed: {type(exc).__name__}: {exc}")
-
     try:
         live_policy = _load_live_policy_via_sftp(target, policy_path)
         sha = live_policy.get("accessTokenSha256")
@@ -203,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
                              "sidecar: C:/WRE/wre6)")
     parser.add_argument("--access-token", default=None,
                         help="Plain access token to install (hashed). Falls back to "
-                             "TARGET_ACCESS_TOKEN in the target env, then v3/live policy.")
+                             "TARGET_ACCESS_TOKEN in the target env, then live policy.")
     args = parser.parse_args(argv)
 
     target = targets.load_target(args.target)

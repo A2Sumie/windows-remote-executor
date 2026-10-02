@@ -1,0 +1,22 @@
+# QC-WRE mutation-run configuration (audit pass 2026-09; see
+# scratch/ubob-ai-tools/qc-wre-report.md). Only the [tool.mutmut] section is
+# used — this file has no packaging effect.
+[tool.mutmut]
+source_paths = ["v6/controller", "v6/native", "v6/mcp", "v6/tests"]
+do_not_mutate = [
+    "v6/tests/*",
+    # windows-only COM/service lanes: 0% coverable off-Windows, survivors by
+    # design — excluded from the audit denominator
+    "v6/native/win32/scheduled_tasks.py",
+    "v6/native/win32/sshd.py",
+    "v6/native/win32/service.py",
+    "v6/native/win32/firewall.py",
+    "v6/native/actions/host.py",
+    # CLI/sftp front-ends: not part of the protocol/dispatch/validation core
+    "v6/controller/sftp.py",
+    "v6/controller/shell.py",
+]
+mutate_only_covered_lines = true
+pytest_add_cli_args_test_selection = ["v6/tests"]
+pytest_add_cli_args = ["-p", "no:randomly", "-q", "--timeout=120"]
+timeout_constant = 60

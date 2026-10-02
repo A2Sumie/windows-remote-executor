@@ -135,7 +135,7 @@ if ($rc -eq 0) {
     Write-Host ""
     Write-Host "== WRE v6 installed at $destShown =="
     $nameShown = if ([string]::IsNullOrWhiteSpace($Name)) { '<NAME>' } else { $Name }
-    Write-Host "Controller side: add windows-remote-executor/targets/$nameShown.env"
+    Write-Host "Controller side: add v6/targets/$nameShown.env"
     Write-Host "  (SSH host/user/key/port + TARGET_ACCESS_TOKEN = the same secret)"
     Write-Host "then: PYTHONPATH=. python3 -m v6.scripts.verify_v6_remote $Name"
 }
