@@ -1,123 +1,91 @@
-# WRE v6.1.2 — Windows bootstrap package
+# WRE v6.1.2
 
-Operate a Windows host from macOS/Linux through structured JSON RPC over SSH.
-This release packages the v6.1 runtime and the self-elevating Windows installer.
+Windows/WSL control through JSON RPC over SSH: processes and jobs, files,
+scheduled tasks, WSL, sessions and an optional MCP frontend.
 
-**Start here:** [Full deployment guide](https://github.com/A2Sumie/windows-remote-executor/blob/main/DEPLOYMENT.md)
-· [Controller source at v6.1.2](https://github.com/A2Sumie/windows-remote-executor/tree/v6.1.2)
-· [Protocol and action reference](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/V6.md)
+[Deployment guide](https://github.com/A2Sumie/windows-remote-executor/blob/main/DEPLOYMENT.md)
+· [Quick Start](https://github.com/A2Sumie/windows-remote-executor/blob/main/QUICKSTART.md)
+· [Onboarding helpers](https://github.com/A2Sumie/windows-remote-executor/tree/main/onboarding)
+· [Protocol](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/V6.md)
 
-## Downloads and integrity
+## Downloads
 
-| Asset | Purpose |
+| Asset | Use |
 |---|---|
-| [wre-6.1.2-windows-x64.zip](https://github.com/A2Sumie/windows-remote-executor/releases/download/v6.1.2/wre-6.1.2-windows-x64.zip) | Windows bootstrap package, 18,247,093 bytes |
-| [SHA256SUMS.txt](https://github.com/A2Sumie/windows-remote-executor/releases/download/v6.1.2/SHA256SUMS.txt) | Package checksum |
-| [DEPLOYMENT.md](https://github.com/A2Sumie/windows-remote-executor/releases/download/v6.1.2/DEPLOYMENT.md) | Downloadable deployment guide |
+| `wre-6.1.2-windows-x64.zip` | Windows runtime, native source and original installer |
+| `SHA256SUMS.txt` | Original runtime ZIP checksum |
+| `create-wre-target.py` | Controller credential storage and hash-only Windows bootstrap |
+| `initialize-pwsh7.ps1` | pwsh 7 Terminal/parser/analyzer initialization |
+| `initialize-wre.ps1` | Assisted Windows console installation and diagnostic reports |
+| `ONBOARDING_SHA256SUMS.txt` | Checksums for the three onboarding helpers |
+| `DEPLOYMENT.md` | Downloadable installation, update and troubleshooting guide |
+
+Runtime ZIP SHA256:
 
 ```text
-677a562326aa0d9ffb2a679c8f3f529884767bdc10db516bd64e305a421952f7  wre-6.1.2-windows-x64.zip
+677a562326aa0d9ffb2a679c8f3f529884767bdc10db516bd64e305a421952f7
 ```
 
-The bootstrap package contains Python 3.12.10, pywin32 308 and comtypes 1.4.8,
-with pinned dependency hashes in `manifest.json`. Source tag: `v6.1.2`, commit
-[`77251cd`](https://github.com/A2Sumie/windows-remote-executor/commit/77251cd).
-Use the named Windows ZIP for installation; GitHub's automatic **Source code**
-archives contain the controller/source tree.
+GitHub's Source code archives provide the controller/source checkout. Use
+the named Windows ZIP for the bundled Python runtime.
 
-## What changed since v6.1.1
+## Installation flow updated 2026-10-14
 
-- **Transport failure handling:** read-phase SSH breaks surface without an
-  automatic resend, so a processed write is not silently duplicated.
-  Provably undelivered write-phase failures reconnect and retry once.
-- **MCP resilience:** tool exceptions are contained, quick tools have bounded
-  deadlines, and the server supplies agent-facing instructions.
-- **Path and argument handling:** Explorer quote pairs and doubled path
-  backslashes are normalized; suspicious shell arguments receive a
-  `quotingNote`.
-- **v3 retirement:** the old v3 trees were removed from this tag; controller
-  target files now live in `v6/targets/`, and deployment token resolution uses
-  the explicit token, target env or live policy.
-- **Verification:** the release source includes the v6 unit/integration and
-  chaos suites.
+1. Install or discover pwsh 7; initialize the Windows Terminal Core profile.
+   Use a machine-wide MSI installation for SYSTEM tasks.
+2. Use `create-wre-target.py` on the controller to discover the exact online
+   Tailscale peer and save the private env (0600). The Token is never printed.
+3. Transfer only its bootstrap JSON: public key, actual target/controller
+   addresses and Token SHA256.
+4. In local Administrator pwsh 7, run the checksum-verified
+   `initialize-wre.ps1` with `-ConfigFile` and `-PackageDirectory`.
+   Use `-CheckOnly` first.
+5. Verify actual SSH/WRE authentication with the matching v6.1.2 controller,
+   including a token-required RPC, process execution and exact active listener.
 
-## New Windows host
+The initializer validates the assigned host address and package selftest,
+uses NetSecurity for a tailnet-only SSH rule, authorizes the public key with
+Windows SID-based ACLs, aligns policy/apply spec/listener, grants the selected
+SSH user access to the WRE directory, and verifies the required SYSTEM tasks.
+It preserves existing business apply-spec fields during reinstallation.
 
-First prepare OpenSSH Server, a reachable private listener address and SSH
-key authentication. The [deployment guide](https://github.com/A2Sumie/windows-remote-executor/blob/main/DEPLOYMENT.md)
-includes the Windows and controller commands for those prerequisites.
+The plain Token and SSH private key stay on the controller. Existing targets
+require explicit `--reuse` or `--rotate-token`; rotation saves a private backup.
+Installer errors include a phase and a persistent JSON/transcript path.
 
-In **Windows PowerShell**, after downloading the ZIP:
+For local parsing/lint, use
+`pwsh -NoLogo -NoProfile -NonInteractive -File initialize-pwsh7.ps1 -InstallAnalyzer`.
+WRE's control protocol uses the fixed bundled Python `rpc-stdio` entrypoint.
 
-```powershell
-$archive = Join-Path $env:USERPROFILE 'Downloads\wre-6.1.2-windows-x64.zip'
-$package = Join-Path $env:USERPROFILE 'Downloads\wre-6.1.2'
-$expected = '677a562326aa0d9ffb2a679c8f3f529884767bdc10db516bd64e305a421952f7'
-if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
-    throw 'WRE package checksum mismatch; stop before installing.'
-}
-Expand-Archive -LiteralPath $archive -DestinationPath $package
+## Existing host and recovery
 
-$tokenBytes = New-Object byte[] 32
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($tokenBytes)
-$rng.Dispose()
-$token = ([BitConverter]::ToString($tokenBytes)).Replace('-', '').ToLowerInvariant()
+Use `--reuse` to regenerate a bootstrap from the saved private target, then
+`initialize-wre.ps1 -PreserveToken` for a matching-token reinstall. A listener
+change must update policy, apply spec and sshd configuration together.
 
-# Replace the alias and listener IP; save $token securely for the controller.
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$package\install-wre.ps1" -Name 'WIN-LAB' -Listen '192.168.50.20' -Token $token
+For a lost Token, use `--rotate-token`, transfer the new bootstrap and run the
+initializer without `-PreserveToken`. Complete controller verification before
+considering the connection ready.
+
+Default WRE executable paths for user-managed antivirus exceptions:
+
+```text
+C:/WRE/wre/python/python.exe
+C:/WRE/wre/python/pythonw.exe
 ```
 
-Extract to a user-writable directory, keep the package together, and approve
-the UAC request. The installer creates `C:/WRE/wre`, writes the token hash,
-pins sshd's listener and registers repair/apply tasks. Check its output for
-errors before continuing.
+The guide also covers bootstrap executable exceptions, public-key failures,
+stopped sshd, Taildrop filename locks, backups, rollback and MCP configuration.
 
-## Controller setup and smoke test
+## Verification and runtime notes
 
-On **macOS/Linux**, use the matching tag:
+The onboarding controller test suite and syntax/PSScriptAnalyzer gates passed.
+Real Windows Core 7.6.6 read-only package preflight and isolated Terminal/ACL/
+apply-spec checks passed; macOS Core 7.6.0 parser/analyzer initialization also
+passed. This update did not exercise a full fresh privileged Windows install.
 
-```bash
-git clone --branch v6.1.2 --depth 1 https://github.com/A2Sumie/windows-remote-executor.git wre-controller-6.1.2
-cd wre-controller-6.1.2
-cp v6/targets/example.env v6/targets/WIN-LAB.env
-chmod 600 v6/targets/WIN-LAB.env
-```
-
-Edit the env file with the SSH host/user/port, absolute private-key path,
-expected listener address and `TARGET_ACCESS_TOKEN` set to the **plain token**
-from installation. Real target env files are gitignored. Then run:
-
-```bash
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --info
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --probe
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --guard
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB process.run '{"exe":"C:/WRE/wre/python/python.exe","args":["--version"]}'
-```
-
-Expect successful RPC responses, `protocolVersion: 6`, build `v6.1`, a valid
-policy and process `exitCode: 0`. The full
-`python3 -m v6.scripts.verify_v6_remote WIN-LAB` matrix additionally exercises
-jobs, files and WSL. WSL is optional: an absent WSL component can make that
-matrix exit nonzero with `wsl.list`/`not-found`; inspect the core results too.
-
-## Existing host: preserve the token
-
-After downloading, verifying and extracting the package, reinstall on Windows
-with **all three arguments**:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$package\install-wre.ps1" -Name 'WIN-LAB' -Listen '192.168.50.20' -KeepPolicy
-```
-
-The controller update route must select the extracted release directory:
-
-```bash
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB file.mkdir '{"path":"C:/WRE/inbox"}'
-PYTHONPATH=. python3 -m v6.scripts.deploy_sftp WIN-LAB --build-dir /absolute/path/to/extracted-package/wre
-```
-
-See the [guide](https://github.com/A2Sumie/windows-remote-executor/blob/main/DEPLOYMENT.md)
-for backup, rollback, MCP setup and troubleshooting. Treat the WRE token as a
-SYSTEM credential. The `wre_find` family needs the separately deployed
-`C:/WRE/tmp/wreq.exe`; use `wre_search` when it is absent.
+The original v6.1.2 runtime ZIP retains its published checksum. Runtime build
+is `v6.1`, protocol 6, bundled Python 3.12.10. Use the matching tag for the
+controller. WSL is optional: the full verifier may report `wsl.list/not-found`
+when it is absent. The `wre_find` family requires separately deployed
+`C:/WRE/tmp/wreq.exe`; use bounded `wre_search` when it is unavailable.

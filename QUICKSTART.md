@@ -10,14 +10,14 @@ On macOS/Linux with Python 3.10+ and OpenSSH client tools:
 ```bash
 git clone --branch v6.1.2 --depth 1 https://github.com/A2Sumie/windows-remote-executor.git wre-controller-6.1.2
 cd wre-controller-6.1.2
-cp v6/targets/example.env v6/targets/WIN-LAB.env
-chmod 600 v6/targets/WIN-LAB.env
+export WRE_TARGETS_DIR="$HOME/.config/wre/targets"
 ```
 
-Set the real SSH host/user/port, private-key path,
-`TARGET_EXPECTED_LISTEN_ADDRESS` and `TARGET_ACCESS_TOKEN` in that env file.
-The token is the plain secret used by the Windows installer. SSH key
-authentication must work unattended (`BatchMode=yes`).
+Follow the deployment guide's `create-wre-target.py` step to save
+`$WRE_TARGETS_DIR/WIN-LAB.env` with mode 0600 and transfer its hash-only
+bootstrap to Windows. Existing manually configured targets can retain their
+private env files. SSH key authentication must work unattended (`BatchMode=yes`),
+and a token-required RPC must succeed after installation.
 
 ## First commands
 
@@ -56,6 +56,9 @@ PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --session host.info '{}' hos
 Keep Windows paths in forward-slash form inside JSON. Send script bodies as
 file text and run the staged file with explicit arguments. Processes and WSL
 run as the SSH user; privileged tasks use the explicit SYSTEM lanes.
+Use an absolute `pwsh.exe` from a verified PowerShell 7 installation for
+PowerShell files; the Release's `initialize-pwsh7.ps1` selects its Terminal
+profile and can initialize the local analyzer.
 A transport break after a write may mean the host already processed it, so
 inspect state before deliberately retrying.
 

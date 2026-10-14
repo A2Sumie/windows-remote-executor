@@ -42,6 +42,10 @@ PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB host.tasks.list '{"prefix":"
   manual inspection and diagnosis. Discover the actual tool signatures.
 - Concrete process calls use an absolute `exe` and an `args` array. Stage
   scripts with `file.writeText` and pass their paths as arguments.
+- Use PowerShell Core >=7 (`pwsh.exe`) for PowerShell scripts, passing
+  `-NoLogo -NoProfile -NonInteractive -File` and a staged script path.
+  Discover the actual executable per host; verify a machine-wide path for
+  SYSTEM tasks rather than assuming a user WindowsApps alias works there.
 - `process.*`, `file.*` and `wsl.*` run as the SSH login user. Privileged work
   uses `host.task.*` or the elevated-bootstrap SYSTEM apply-agent.
 - Treat the token as SYSTEM-equivalent. Protected paths are an accident
@@ -58,10 +62,13 @@ PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB host.tasks.list '{"prefix":"
 
 ## Deployment and verification
 
-First installation runs on the Windows console using `install-wre.ps1` with
-`-Name`, `-Listen`, and exactly one of `-Token`/`-KeepPolicy`. Keep `-Name` and
-`-Listen` explicit on reinstalls. The installer needs elevation to register
-repair/apply tasks and pin sshd's private listener.
+The assisted first installation runs locally in Administrator pwsh 7 using
+the Release's `initialize-wre.ps1` and a controller-generated hash-only
+bootstrap. `create-wre-target.py` retains the plain Token in a private env;
+`--reuse` and `--rotate-token` are explicit credential choices. The original
+native `install-wre.ps1` requires `-Name`, `-Listen`, and exactly one of
+`-Token`/`-KeepPolicy`. Keep `-Name` and `-Listen` explicit on native reinstalls.
+Align the policy/apply spec/listener together when the address changes.
 
 For later controller uploads, use the verified release's extracted `wre/`
 directory as `deploy_sftp --build-dir`, prepare `C:/WRE/inbox`, and keep

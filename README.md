@@ -11,8 +11,10 @@ package so both sides match.
 
 ## Get started
 
-- [Deployment guide](DEPLOYMENT.md): OpenSSH and keys, package verification,
-  first installation, controller configuration, updates, rollback and MCP.
+- [Deployment guide](DEPLOYMENT.md): Tailscale discovery, pwsh 7 initialization,
+  saved controller credentials, SSH keys, installation, updates, rollback and MCP.
+- [Onboarding helpers](onboarding/README.md): reusable pwsh 7 and hash-only
+  Windows initialization scripts, also attached to the Release with checksums.
 - [Quick Start](QUICKSTART.md): first commands and the action families.
 - [v6.1.2 release notes](releases/v6.1.2/README.md): downloads and changes.
 - [v6 protocol and actions](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/V6.md).

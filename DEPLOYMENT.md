@@ -1,253 +1,329 @@
 # WRE v6.1.2 deployment guide
 
-Install the Windows bootstrap package on the host, then use the matching
-`v6.1.2` controller checkout on macOS or Linux. The default host entry is
-`C:/WRE/wre/rpc.py`; requests and responses are UTF-8 JSON lines over SSH stdin
-and stdout.
+Use the v6.1.2 Windows runtime/controller together with the onboarding helpers
+attached to the [v6.1.2 Release](https://github.com/A2Sumie/windows-remote-executor/releases/tag/v6.1.2).
+The onboarding flow below selects the real Tailscale address, initializes
+pwsh 7, authorizes the controller public key, and installs a hash-only policy.
 
-[Download v6.1.2](https://github.com/A2Sumie/windows-remote-executor/releases/tag/v6.1.2)
-· [Protocol and actions](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/V6.md)
+The controller's plain Token is saved automatically in a private env file.
+Windows receives a bootstrap JSON containing the public key and Token SHA256.
+WRE uses the bundled Python at `C:/WRE/wre`; PowerShell scripts run through
+pwsh 7 with `-File` and structured arguments.
 
 ## Requirements
 
 | Side | Requirements |
 |---|---|
-| Windows host | x64 Windows with OpenSSH Server; an existing local or domain account for SSH; Administrator access for the first installation |
-| Controller | macOS/Linux, Python 3.10+, Git and OpenSSH client tools (`ssh`, `scp`, `sftp`) |
-| Network | The controller can reach the host's private LAN or Tailscale address on TCP 22 |
+| Windows host | x64 Windows; Tailscale online; an enabled local SSH account in Administrators with an existing Windows profile; Administrator access for installation |
+| Controller | macOS/Linux, Python 3.10+, Git, OpenSSH client tools and Tailscale CLI |
+| PowerShell | pwsh 7 Core; Windows Terminal is optional; PSScriptAnalyzer is optional for local script lint |
+| Network | Both devices are on the same authorized tailnet; TCP 22 is reachable |
 
-The bootstrap ZIP includes Python 3.12.10, pywin32 308 and comtypes 1.4.8.
-These dependencies are pinned by SHA256 in the package builder and recorded in
-`manifest.json`. The controller CLI uses the Python standard library; the
-optional MCP frontend also needs the `mcp` package.
+The Windows package includes Python 3.12.10, pywin32 308 and comtypes 1.4.8.
+The default installed entry is `C:/WRE/wre/rpc.py`. Requests and responses
+remain UTF-8 JSON lines over the fixed SSH `rpc-stdio` entrypoint.
 
-Examples use host alias `WIN-LAB`, Windows login `wreuser`, host address
-`192.168.50.20` and controller address `192.168.50.10`. Replace those values
-with your actual account and addresses. The examples assume the SSH account
-is a member of the Windows Administrators group and can write `C:/WRE`.
+The assisted flow is for Tailscale IPv4 and local Windows accounts. Existing
+domain-account or LAN-only installations can retain their configured SSH
+authentication and use the release's native installer with an assigned
+private address. Keep policy, apply spec and sshd listener aligned.
 
-## 1. Prepare OpenSSH on Windows
+## 1. Identify the Windows device and initialize pwsh 7
 
-Open **Windows PowerShell as Administrator** on the host. Install and start
-OpenSSH Server explicitly before running the WRE installer:
-
-```powershell
-$capability = Get-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0'
-if ($capability.State -ne 'Installed') {
-    Add-WindowsCapability -Online -Name 'OpenSSH.Server~~~~0.0.1.0' | Out-Null
-}
-Set-Service -Name sshd -StartupType Automatic
-Start-Service -Name sshd
-
-$controllerAddress = '192.168.50.10'
-$rule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
-if ($rule) {
-    $rule | Set-NetFirewallRule -Enabled True -RemoteAddress $controllerAddress
-} else {
-    New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 -RemoteAddress $controllerAddress
-}
-```
-
-Choose an address already assigned to the host for the installer's `-Listen`
-argument. The installer pins `sshd_config` to that address and restarts sshd.
-Using an address that is absent from the host can make SSH unreachable.
-
-Microsoft documents the [OpenSSH installation and service setup](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse).
-
-## 2. Set up SSH key authentication
-
-On the **macOS/Linux controller**, create a key or use an existing one. For a
-key protected by a passphrase, load it into your SSH agent:
-
-```bash
-ssh-keygen -t ed25519 -f "$HOME/.ssh/wre_win_lab" -C "WRE WIN-LAB"
-ssh-add "$HOME/.ssh/wre_win_lab"
-cat "$HOME/.ssh/wre_win_lab.pub"
-```
-
-Copy the public key line to the Windows host. For the administrator account
-used in these examples, run this in **elevated Windows PowerShell**, replacing
-the sample key with that line:
+On Windows, sign in once with the account that will use SSH. Record the actual
+hostname and account name; the profile directory can have a different name:
 
 ```powershell
-$publicKey = 'ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_KEY WRE-WIN-LAB'
-$keys = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
-Add-Content -LiteralPath $keys -Value $publicKey -Encoding ascii
-icacls.exe $keys /inheritance:r /grant:r '*S-1-5-32-544:F' /grant:r '*S-1-5-18:F'
+$env:COMPUTERNAME
+$env:USERNAME
+tailscale ip -4
 ```
 
-Check that the key file's ACL contains only Administrators and SYSTEM; review
-any pre-existing explicit permissions. The SIDs above work on localized
-Windows installations. A standard Windows account uses its own
-`C:/Users/<user>/.ssh/authorized_keys` instead and needs appropriate access to
-the WRE directories for file writes and updates. See Microsoft's
-[key authentication guide](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_keymanagement).
+The Tailscale IPv4 printed here is the address for this device. Avoid copying
+an executable example LAN address. The initializer rejects a bootstrap whose
+address is absent from this Windows host.
 
-From the controller, verify the host key fingerprint through the Windows
-console or another trusted channel, then connect:
-
-```bash
-ssh -i "$HOME/.ssh/wre_win_lab" -p 22 wreuser@192.168.50.20
-```
-
-Exit that interactive session, then confirm unattended authentication works:
-
-```bash
-ssh -o BatchMode=yes -i "$HOME/.ssh/wre_win_lab" -p 22 wreuser@192.168.50.20 exit
-```
-
-WRE uses `BatchMode=yes`, so a password prompt or an unloaded key passphrase
-will prevent controller calls. Keep the SSH private key on the controller.
-
-## 3. Download, verify and install WRE on Windows
-
-Use a normal **Windows PowerShell** window. Download the bootstrap ZIP into a
-user-writable directory and check its checksum before extraction:
+If pwsh 7 is missing, run this in an Administrator terminal:
 
 ```powershell
-$release = 'https://github.com/A2Sumie/windows-remote-executor/releases/download/v6.1.2'
-$archive = Join-Path $env:USERPROFILE 'Downloads\wre-6.1.2-windows-x64.zip'
-$package = Join-Path $env:USERPROFILE 'Downloads\wre-6.1.2'
-Invoke-WebRequest -Uri "$release/wre-6.1.2-windows-x64.zip" -OutFile $archive
-$expected = '677a562326aa0d9ffb2a679c8f3f529884767bdc10db516bd64e305a421952f7'
-if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) {
-    throw 'WRE package checksum mismatch; stop before installing.'
-}
-Expand-Archive -LiteralPath $archive -DestinationPath $package
+winget install --id Microsoft.PowerShell --exact --source winget --installer-type wix --silent --accept-package-agreements --accept-source-agreements
 ```
 
-Use a new extraction directory if that destination already exists. Select
-`wre-6.1.2-windows-x64.zip` in the release assets: GitHub's automatic
-**Source code** archives are for the controller/source checkout and do not
-include the embedded Windows runtime.
+Select the MSI installer type for a machine-wide installation, including
+future SYSTEM tasks. WinGet's default PowerShell 7.6 package is MSIX and is
+user-scoped. If WinGet is unavailable, use the official
+[PowerShell MSI instructions](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-windows).
+PowerShell 7 runs alongside Windows PowerShell 5.1.
 
-The extracted root contains:
-
-```text
-deploy-wre.py
-install-wre.ps1
-manifest.json
-wre/
-  rpc.py
-  actions/
-  win32/
-  python/python.exe
-  python/pythonw.exe
-```
-
-Generate a random token in that same PowerShell session:
+Open a new pwsh 7 window and confirm:
 
 ```powershell
-$tokenBytes = New-Object byte[] 32
-$rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-$rng.GetBytes($tokenBytes)
-$rng.Dispose()
-$token = ([BitConverter]::ToString($tokenBytes)).Replace('-', '').ToLowerInvariant()
+$PSVersionTable.PSVersion
+$PSVersionTable.PSEdition
+(Get-Process -Id $PID).Path
 ```
 
-Save the value of `$token` in your password manager for the controller's
-`TARGET_ACCESS_TOKEN`. Then install, keeping the alias and listener explicit:
+Expect version 7 or later and edition `Core`. A discovered WindowsApps alias
+is suitable for that user; verify a machine-wide executable separately before
+using it in a SYSTEM task.
 
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$package\install-wre.ps1" -Name 'WIN-LAB' -Listen '192.168.50.20' -Token $token
-```
+## 2. Download and verify the onboarding helpers
 
-Approve the UAC elevation request. Keep the entire extracted package together;
-the wrapper locates `deploy-wre.py` and `wre/python/python.exe` relative to
-itself. It works from paths with spaces or Unicode characters.
+The Release provides these additional assets:
 
-The installer selftests the package, creates `C:/WRE/wre`, copies the runtime
-and source, writes the token hash to `access-policy.json`, backs up and pins
-`sshd_config`, and registers the `WRE Sshd Repair *` and `WRE WRE Apply`
-scheduled tasks. Check the console output for task-registration errors even
-if the installer exits successfully.
+| Asset | Purpose |
+|---|---|
+| `create-wre-target.py` | Save the private controller env and create hash-only Windows bootstrap JSON |
+| `initialize-pwsh7.ps1` | Select the existing pwsh 7 Terminal profile; optionally install PSScriptAnalyzer |
+| `initialize-wre.ps1` | Validate host/account/package, configure SSH/key/firewall/policy and verify installation |
+| `ONBOARDING_SHA256SUMS.txt` | Checksums of the three helpers |
 
-The SSH login user runs RPC/process/file operations. Repair and apply-agent
-tasks run as SYSTEM. **Treat the WRE token as a SYSTEM credential**: a token
-holder can use the privileged task lanes. Keep it and the SSH key out of Git.
-Missing, corrupt or null-token policies fail closed; only
-`host.capabilities` remains available without valid authentication.
-
-## 4. Configure the macOS/Linux controller
-
-Use the same release tag as the Windows package:
+On the controller, use the matching controller checkout and download all
+three helpers into its `onboarding` directory:
 
 ```bash
 git clone --branch v6.1.2 --depth 1 https://github.com/A2Sumie/windows-remote-executor.git wre-controller-6.1.2
 cd wre-controller-6.1.2
-cp v6/targets/example.env v6/targets/WIN-LAB.env
-chmod 600 v6/targets/WIN-LAB.env
+mkdir -p onboarding
+wre_release=https://github.com/A2Sumie/windows-remote-executor/releases/download/v6.1.2
+for wre_asset in create-wre-target.py initialize-pwsh7.ps1 initialize-wre.ps1 ONBOARDING_SHA256SUMS.txt; do
+    curl -fL -o "onboarding/$wre_asset" "$wre_release/$wre_asset" || exit 1
+done
+python3 - <<'PY'
+import hashlib
+from pathlib import Path
+
+directory = Path("onboarding")
+expected_names = {"create-wre-target.py", "initialize-pwsh7.ps1", "initialize-wre.ps1"}
+manifest = {}
+for line in (directory / "ONBOARDING_SHA256SUMS.txt").read_text().splitlines():
+    digest, name = line.split("  ", 1)
+    if name not in expected_names or name in manifest:
+        raise SystemExit("Unexpected onboarding manifest entry")
+    manifest[name] = digest
+if set(manifest) != expected_names:
+    raise SystemExit("Incomplete onboarding manifest")
+for name, expected in manifest.items():
+    if hashlib.sha256((directory / name).read_bytes()).hexdigest() != expected:
+        raise SystemExit("Checksum mismatch: " + name)
+print("Onboarding checksums OK")
+PY
 ```
 
-Edit `v6/targets/WIN-LAB.env` with these fields:
+Transfer the two verified `.ps1` files and their checksum file to a Windows
+Downloads subdirectory named `wre-onboarding`. Taildrop can transfer them
+before SSH is available. Alternatively download the same assets on Windows
+and verify them with `Get-FileHash -Algorithm SHA256` before executing them.
 
-```dotenv
-TARGET_NAME=WIN-LAB
-TARGET_HOST=192.168.50.20
-TARGET_USER=wreuser
-TARGET_PORT=22
-TARGET_KEY=/Users/you/.ssh/wre_win_lab
-TARGET_EXPECTED_LISTEN_ADDRESS=192.168.50.20
-TARGET_EXPOSURE_MODE=private-only
-TARGET_ACCESS_TOKEN=REPLACE_WITH_TOKEN_FROM_INSTALL
+In a normal pwsh 7 console for the Windows Terminal user:
+
+```powershell
+$wreOnboarding = Join-Path $env:USERPROFILE 'Downloads/wre-onboarding'
+& "$wreOnboarding/initialize-pwsh7.ps1" -CheckOnly
+& "$wreOnboarding/initialize-pwsh7.ps1"
 ```
 
-Set `TARGET_KEY` to the real absolute path on the controller, and set
-`TARGET_ACCESS_TOKEN` to the **plain token**, matching `$token` from installation.
-Do not put the SHA256 hash in this field. Real target `.env` files are ignored
-by Git in the released checkout. The loader also accepts an env file's path
-directly, or a directory supplied through `WRE_TARGETS_DIR`.
+The script backs up the original settings and changes only `defaultProfile`
+to the existing enabled PowerShell Core profile. Open Windows Terminal once
+after installing pwsh if the script reports no existing settings/profile.
+New Terminal tabs use the selected profile; existing shells keep their runtime.
+See the [Terminal default-profile reference](https://learn.microsoft.com/en-us/windows/terminal/customize-settings/startup).
 
-## 5. Verify the installation
-
-Run these from the controller checkout root:
+For a macOS/Linux parser/lint workstation, install pwsh 7 using the official
+[macOS](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-macos)
+or [Linux](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-linux)
+instructions, then initialize the analyzer:
 
 ```bash
+pwsh -NoLogo -NoProfile -NonInteractive -File onboarding/initialize-pwsh7.ps1 -InstallAnalyzer
+pwsh -NoLogo -NoProfile -NonInteractive -File onboarding/initialize-pwsh7.ps1 -InstallAnalyzer -CheckOnly
+```
+
+This initializes the native PowerShell parser runtime and PSScriptAnalyzer.
+It does not change the workstation's login shell.
+
+## 3. Create and save the controller credentials
+
+Create an Ed25519 key, or use an existing key with its `.pub` file. Keep the
+private key on the controller and load a passphrase-protected key into the
+SSH agent:
+
+```bash
+ssh-keygen -t ed25519 -f "$HOME/.ssh/wre_win_lab" -C "WRE WIN-LAB"
+ssh-add "$HOME/.ssh/wre_win_lab"
+```
+
+Set the real Windows hostname and login recorded in step 1. The following
+prompts work in Bash and zsh:
+
+```bash
+printf 'Windows hostname from step 1: '
+read -r wreDevice
+printf 'Windows login from step 1: '
+read -r wreUser
+python3 onboarding/create-wre-target.py --name WIN-LAB --tailscale-device "$wreDevice" --user "$wreUser" --key "$HOME/.ssh/wre_win_lab"
+```
+
+The generator selects exactly one online Tailscale peer and saves:
+
+```text
+~/.config/wre/targets/WIN-LAB.env              private Token + SSH target, mode 0600
+~/.config/wre/targets/WIN-LAB.bootstrap.json   public key + Token SHA256, mode 0600
+```
+
+The directory is mode 0700. The Token is never printed. Back up the private
+env securely; it is the credential needed by the controller. The bootstrap
+contains no plain Token or SSH private key.
+
+Transfer only `WIN-LAB.bootstrap.json` to Windows, for example:
+
+```bash
+tailscale file cp "$HOME/.config/wre/targets/WIN-LAB.bootstrap.json" "$wreDevice:"
+```
+
+Use the recipient's Taildrop UI to save it into `Downloads/wre-onboarding`.
+A successful `sent` acknowledgement and exit 0 confirm transfer, not execution.
+If a same-name transfer is locked, resend with a fresh `--name` and pass that
+actual filename to the initializer.
+
+## 4. Download, verify and install WRE locally on Windows
+
+Download and verify the original runtime ZIP in pwsh 7:
+
+```powershell
+$wreRelease = 'https://github.com/A2Sumie/windows-remote-executor/releases/download/v6.1.2'
+$wreArchive = Join-Path $env:USERPROFILE 'Downloads/wre-6.1.2-windows-x64.zip'
+$wrePackage = Join-Path $env:USERPROFILE 'Downloads/wre-6.1.2'
+Invoke-WebRequest -Uri "$wreRelease/wre-6.1.2-windows-x64.zip" -OutFile $wreArchive
+$wreExpected = '677a562326aa0d9ffb2a679c8f3f529884767bdc10db516bd64e305a421952f7'
+if ((Get-FileHash -LiteralPath $wreArchive -Algorithm SHA256).Hash -ne $wreExpected) {
+    throw 'WRE package checksum mismatch.'
+}
+Expand-Archive -LiteralPath $wreArchive -DestinationPath $wrePackage
+```
+
+Use a fresh extraction directory. GitHub's **Source code** archives provide
+the controller source; the named Windows ZIP includes the embedded runtime.
+
+Open **pwsh 7 as Administrator** on the Windows console. Keep this console
+open so failures remain visible. Recreate the paths in that elevated session:
+
+```powershell
+$wreOnboarding = Join-Path $env:USERPROFILE 'Downloads/wre-onboarding'
+$wrePackage = Join-Path $env:USERPROFILE 'Downloads/wre-6.1.2'
+$wreConfig = Join-Path $wreOnboarding 'WIN-LAB.bootstrap.json'
+& "$wreOnboarding/initialize-wre.ps1" -ConfigFile $wreConfig -PackageDirectory $wrePackage -CheckOnly
+if ($LASTEXITCODE -ne 0) { throw 'Preflight failed; read the error before installing.' }
+& "$wreOnboarding/initialize-wre.ps1" -ConfigFile $wreConfig -PackageDirectory $wrePackage
+```
+
+If local execution policy blocks a checksum-verified helper, use pwsh's
+per-process `-ExecutionPolicy Bypass -File` options for that invocation.
+
+The initializer:
+
+1. Checks the host's assigned Tailscale IPv4, local account/profile, public
+   key, Token hash and package selftest before changing configuration.
+2. Installs missing Windows OpenSSH Server and uses NetSecurity to ensure a
+   TCP 22 allow rule with the actual sshd executable path, the selected local
+   address and remote scope `100.64.0.0/10`.
+3. Reads effective `AuthorizedKeysFile` for the account and controller address,
+   appends the public key idempotently, backs up existing files, and applies
+   SID-based Administrators/SYSTEM ACLs; ordinary user key files also retain
+   the account's own access.
+4. Saves only the Token hash and aligns policy, apply spec and sshd listener.
+   It invokes the release's native installer with `--keep-existing-policy` and
+   preserves existing business task/apply-spec fields during reinstalls.
+5. Grants the selected SSH account access to `C:/WRE`, starts a stopped sshd
+   service or restarts a running one, and checks the actual listener and the
+   four required enabled SYSTEM repair/apply tasks.
+
+Expect `success: true`, phase `complete`, and the actual Tailscale listener.
+Installation requires local Administrator access; SSH RPC runs as the selected
+login user. **Treat the Token and the private target env as SYSTEM credentials**.
+The package's original `install-wre.ps1` is also available for native/manual
+installation; the assisted flow uses `initialize-wre.ps1` for these additional
+checks and persistent error reports.
+
+## 5. Verify key authentication and WRE from the controller
+
+Verify the host-key fingerprint through the Windows console or another trusted
+channel. Windows host public-key fingerprints can be read with:
+
+```powershell
+Get-ChildItem (Join-Path $env:ProgramData 'ssh/ssh_host_*_key.pub') | ForEach-Object {
+    ssh-keygen.exe -lf $_.FullName
+}
+```
+
+From the matching controller checkout created in step 2, use the saved env
+file to authenticate through WRE's actual fixed entrypoint:
+
+```bash
+export WRE_TARGETS_DIR="$HOME/.config/wre/targets"
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB host.capabilities '{}'
 PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --info
 PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --probe
 PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --guard
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB process.run '{"exe":"C:/WRE/wre/python/python.exe","args":["--version"]}'
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB file.mkdir '{"path":"C:/WRE/inbox"}'
-PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB host.tasks.list '{"prefix":"WRE","verbose":true}'
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB process.run '{"exe":"C:/WRE/wre/python/python.exe","args":["-I","-X","utf8","--version"]}'
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB host.tasks.list '{"prefix":"WRE","limit":20}'
 ```
 
-Check for `ok: true`, `protocolVersion: 6`, build `v6.1`, a valid policy and
-`wreRoot: C:/WRE`. The process smoke should return `exitCode: 0` and the bundled
-Python version. The task list should include enabled repair tasks and the
-SYSTEM apply task. `--guard` uses `noDisable: true` for inspection; investigate
-any unsafe or unexpected listener addresses it reports.
+`Permission denied (publickey)` is an SSH account/key/ACL problem and occurs
+before the WRE Token check. `host.capabilities` needs SSH authentication but
+is Token-exempt; `host.info`, probe and process execution must also succeed to
+establish usable access.
 
-For the broader process/job/file/WSL matrix:
+Expect `ok: true`, protocol 6, build `v6.1`, policy status `ok`, configured
+and active listeners exactly matching the target, and guard `exposureSafe: true`.
+The bundled interpreter reports Python 3.12.10. A successful file transfer or
+a listening port alone does not establish WRE authentication.
+
+For PowerShell operations, use the discovered absolute pwsh executable and
+stage a script through `file.writeText`, then run `-File` with an argv array.
+Machine-wide installations normally use `C:/Program Files/PowerShell/7/pwsh.exe`.
+The fixed Python RPC transport remains the WRE control entry.
+
+The broader verifier also exercises jobs, files and WSL:
 
 ```bash
 PYTHONPATH=. python3 -m v6.scripts.verify_v6_remote WIN-LAB
 ```
 
-The verifier creates temporary inbox files and process jobs. Task creation is
-disabled by default. It also calls `wsl.list`: a host without the Windows WSL
-component can return `not-found` and make this matrix exit nonzero. WSL is
-optional for core WRE; record that specific gap and still inspect every other
-result. A host with WSL but no distributions skips the WSL execution smoke.
+WSL is optional. A `wsl.list`/`not-found` result can make that matrix exit
+nonzero; inspect the core results separately. The verifier creates temporary
+inbox files/jobs, with task creation disabled by default.
 
-## 6. Update an existing host
+## 6. Reinstall, retain credentials or reset a lost Token
 
-Before changing an installation, keep a copy of its current `wre` tree,
-`access-policy.json` and sshd configuration in a private backup location.
-Retain the previous release package and its checksum for rollback.
+Keep the current tree, policy, apply spec and sshd configuration in a private backup
+location. Retain the old runtime ZIP and its checksum.
 
-### On-host reinstall
+To regenerate a bootstrap while preserving the saved controller Token, run
+the generator with the same target details and `--reuse`. If the existing env
+is in `v6/targets`, point `--targets-dir` there or first copy it into your
+private target directory with mode 0600:
 
-Download and verify the selected package, extract it to a new directory, and
-preserve the existing token policy with **all required arguments**:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$package\install-wre.ps1" -Name 'WIN-LAB' -Listen '192.168.50.20' -KeepPolicy
+```bash
+python3 onboarding/create-wre-target.py --name WIN-LAB --tailscale-device "$wreDevice" --user "$wreUser" --key "$HOME/.ssh/wre_win_lab" --reuse
 ```
 
-`-KeepPolicy` requires a valid existing `C:/WRE/wre/access-policy.json`.
-Supply `-Name` and `-Listen` on reinstalls too: the Python installer requires
-both even though the wrapper's parameter declarations mark them optional.
-To rotate the token, use `-Token $newToken` and update the controller env file.
+On the local elevated Windows console, retain the matching Token with:
+
+```powershell
+& "$wreOnboarding/initialize-wre.ps1" -ConfigFile $wreConfig -PackageDirectory $wrePackage -PreserveToken
+```
+
+`-PreserveToken` checks that the bootstrap hash matches the installed policy.
+The initializer still updates the actual expected listener and apply spec.
+Changing only sshd_config, or using the original `-KeepPolicy` with a new
+`-Listen` argument, can leave self-repair pointing at the old policy address.
+
+If the plain Token has been lost, explicitly run the generator with
+`--rotate-token` in place of `--reuse`. It backs up the old private env and
+stores a new secret before creating the hash-only bootstrap. Transfer that
+bootstrap and run the Windows initializer without `-PreserveToken`, then
+repeat step 5. This updates the host hash and controller credential together.
 
 ### Controller update without elevation
 
@@ -322,7 +398,8 @@ absolute paths with your released checkout location:
       "command": "/absolute/path/wre-controller-6.1.2/.venv/bin/python",
       "args": ["-m", "v6.mcp.wre_mcp"],
       "env": {
-        "PYTHONPATH": "/absolute/path/wre-controller-6.1.2"
+        "PYTHONPATH": "/absolute/path/wre-controller-6.1.2",
+        "WRE_TARGETS_DIR": "/absolute/path/private-wre-targets"
       }
     }
   }
@@ -343,7 +420,13 @@ The `wre_find` family additionally needs a separately deployed
 |---|---|
 | SSH refuses or times out | Confirm the host has the `-Listen` IP, sshd is running, the firewall permits the controller, and TCP 22 is reachable |
 | `Permission denied (publickey)` | Check the SSH user, public-key location/ACL, controller private-key path and loaded SSH agent |
-| Installer reports missing arguments on reinstall | Include `-Name` and `-Listen` together with `-KeepPolicy` |
+| Original installer reports missing arguments on reinstall | Include `-Name` and `-Listen` together with `-KeepPolicy`; the assisted initializer takes a complete bootstrap instead |
+| Listener reverts to an old LAN address | Align `expectedListenAddress`, apply spec and sshd_config; the SYSTEM repair task reads the policy |
+| Firewall COM reports `The parameter is incorrect` | Use the assisted initializer's NetSecurity rule with an absolute sshd path; a stopped sshd also needs starting |
+| Only `exit code 1` is visible | Run from a persistent local Administrator pwsh console and read the phase/error JSON and transcript |
+| `Get-NetTCPConnection` finds no listener | Inspect sshd service state and startup type; a no-match query describes absence, not an installation diagnosis |
+| Taildrop returns `Access denied` for a reused filename | Check the receiver's file/security state and resend with a fresh name; inspect final `sent`/exit0 before assuming delivery |
+| pwsh 7 installed but Terminal opens 5.1 | Run `initialize-pwsh7.ps1` for the Terminal user, then open a new tab |
 | `auth`, missing/corrupt/null-token policy | Match the controller's plain token to the installed hash; restore policy or reinstall on the Windows console |
 | `rpc-stdio did not return JSON` | Check `C:/WRE/wre/python/python.exe` and `C:/WRE/wre/rpc.py`; read stderr and repair the installed tree |
 | SFTP update reports missing build directory | Extract the verified release ZIP and set `--build-dir` to its `wre/` directory |
@@ -354,3 +437,29 @@ Host logs: `C:/WRE/logs/rpc-audit.log`, `jobs-history.log`, `sshd-repair.log`
 and `wre-apply.log`. The installer saves sshd configuration backups under
 `C:/WRE/wre/backup`. Use these records and the controller stderr to diagnose
 failures through the v6 entrypoint.
+
+The assisted initializer also writes `C:/WRE/logs/onboarding-*.log` and
+`onboarding-result-*.json`. Early/non-administrator failures can save the
+JSON report in the current user's temporary directory; the console prints
+the actual report path. Reports include the failed phase and error message,
+with no plain Token or private key.
+
+## Antivirus exceptions
+
+For a reviewed WRE installation at the default root, its executable paths are:
+
+```text
+C:\WRE\wre\python\python.exe    RPC and process execution
+C:\WRE\wre\python\pythonw.exe   SYSTEM repair/apply tasks
+```
+
+During installation, the package selftest uses the extracted package's
+`wre/python/python.exe`. A security product that blocks that copy can prevent
+preflight even when the installed interpreter is allowed. Review the named
+executable/helper and its verified checksum in the product's quarantine or
+exception UI. Manage exceptions explicitly; the helpers do not change
+antivirus settings.
+
+Microsoft references: [OpenSSH service installation](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse),
+[key location and permissions](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_keymanagement),
+[PowerShell installation](https://learn.microsoft.com/en-us/powershell/scripting/install/installing-powershell-on-windows).
