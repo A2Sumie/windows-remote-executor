@@ -1,80 +1,54 @@
-# Windows Remote Executor
+# Windows Remote Executor (WRE)
 
-Windows Remote Executor is a two-part toolkit for operating Windows hosts from macOS or Linux agent-driven workflows.
+WRE lets macOS/Linux controllers and coding agents operate Windows hosts
+through structured JSON RPC over SSH. The Windows bootstrap package includes
+its Python runtime, while the controller provides a CLI, reusable sessions
+and an optional stdio MCP server.
 
-- `windows-remote-executor/` is the local Python wrapper plus a small shell shim
-- `windows-remote-executor-native/` is the Windows-side native executor
+**Stable release: [v6.1.2](https://github.com/A2Sumie/windows-remote-executor/releases/tag/v6.1.2).**
+For deployment, use that tag's controller source together with its Windows
+package so both sides match.
 
-In the parent `livestr` workspace, older top-level paths may be symlinks into this repository. Keep this as the single source tree; do not maintain a second copy.
+## Get started
 
-The design goal is simple: keep SSH as the transport and choose routes that minimize quoting, encoding, path, and command-length failures. V3 targets receive remote-control operations over the native `rpc-stdio` protocol: the SSH command is fixed, and user payload travels as one UTF-8 JSON request line on stdin rather than shell syntax or remote argv.
+- [Deployment guide](DEPLOYMENT.md): OpenSSH and keys, package verification,
+  first installation, controller configuration, updates, rollback and MCP.
+- [Quick Start](QUICKSTART.md): first commands and the action families.
+- [v6.1.2 release notes](releases/v6.1.2/README.md): downloads and changes.
+- [v6 protocol and actions](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/V6.md).
+- [Agent instructions template](templates/AGENT_INSTRUCTIONS_TEMPLATE.md).
 
-For agentic clients, the preferred control plane is now the structured MCP server in `windows-remote-executor/MCP.md`, not ad hoc shell command generation.
+## What WRE provides
 
-## Features
+- Synchronous process execution with structured output and exit codes.
+- Supervised asynchronous jobs with status, output, wait and kill operations.
+- File reads/writes, transfers and bounded filesystem search.
+- Scheduled-task inspection and explicit privileged task lanes.
+- WSL execution through structured arguments.
+- A session mode that shares one SSH connection across multiple requests.
+- Token authentication, listener-policy checks and on-host repair tasks.
 
-- remote native process and Python execution through V3 `rpc-stdio`
-- structured capture for localized or byte-sensitive process output
-- staged PowerShell/cmd script bridge for cases that are not naturally argv-shaped
-- structured WSL program and script execution so Linux-side work does not need `wsl.exe ... bash -lc ...`
-- explicit WSL Python execution for venv/conda/model environments without nested shell activation strings
-- staged WSL script transfer so longer shell payloads do not hit Windows command-line length limits
-- a minimal stdio MCP server so agents can call structured tools instead of composing shell strings
-- structured scheduled-task inspection so task names with spaces do not need handwritten PowerShell quoting
-- JSON host probing
-- staged directory deploys
-- hot updates for the remote tool directory that switch a stable launcher to a new versioned release
-- private-network policy enforcement
-- optional access-token requirement for native commands
-- automatic `sshd` disablement when listener exposure drifts outside policy
-- explicit `repair-sshd` / `win-remote repair` self-heal for config or startup drift
+The normal host entry is `C:/WRE/wre/rpc.py`, using the bundled interpreter.
+RPC runs as the SSH login user; the elevated installer registers SYSTEM repair
+and apply-agent tasks. Treat the access token as a SYSTEM credential and keep
+it in a private, gitignored target env file.
 
-## Security
+## Source and packaging
 
-- default mode is `private-only`
-- private mode allows only standard private IPv4 ranges plus loopback and link-local recovery addresses
-- wildcard listeners are treated as unsafe
-- public exposure is opt-in only, requires an access token hash, and is explicitly labeled
-- the guard can run manually or as a scheduled task
+The maintained control plane is `v6/`. Deployment source is fixed by the
+chosen release tag; `v4/` and `v5/` are historical trees. Older v3/.NET release
+assets remain available for historical versions.
 
-## Build and Release
+The v6 Windows asset is `wre-6.1.2-windows-x64.zip`. It contains
+`install-wre.ps1`, `deploy-wre.py`, the native RPC source and embedded Python.
+GitHub's automatic source archives provide the controller/source checkout.
+Build details and dependency SHA256 pins are in
+[`v6/scripts/make_bootstrap_package.py`](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/scripts/make_bootstrap_package.py).
 
-The native project supports two Windows publish modes:
+Agent contributors should read [AGENTS.md](AGENTS.md). In the parent `livestr`
+workspace, scope Git commands to this owning repository.
 
-- framework-dependent: smaller, easier to inspect, better for GitHub/source releases
-- self-contained single-file: easier to drop on a host, but more likely to trigger generic `.NET packer/compression` heuristics
+## License and provenance
 
-Start with the framework-dependent publish unless you specifically need drop-and-run deployment.
-
-The current framework-dependent build targets `.NET 8` on Windows.
-
-Remote executor deployments must use GitHub release assets. Local publish outputs are for development verification only; after changes are verified, tag the repository, let GitHub Actions build the release, and update the remote host from that release artifact.
-
-## Agent Template
-
-This repository also ships agent-facing entrypoints that are meant to be discovered directly by tooling:
-
-- `AGENTS.md` for repository-local agent guidance
-- `QUICKSTART.md` for entrypoint discovery
-- `templates/AGENT_INSTRUCTIONS_TEMPLATE.md` for copy-paste system-prompt or task-brief usage
-
-## Agent Quick Start
-
-If an agent opens this repository cold, the shortest safe path is:
-
-1. Read `AGENTS.md`.
-2. Read `windows-remote-executor/README.md`.
-3. Run `./windows-remote-executor/bin/win-remote probe <target>`.
-4. Prefer `run`, `capture`, `wsl`, `wsl-sh`, `py`, `put`, `get`, `deploy`, `policy`, `guard`, `repair`, `tasks`, `exec`, and `update-tools`; remote control uses V3 `rpc-stdio` through the native executor.
-5. Prefer the MCP server for routine agent use; use `exec --file` only when script control is actually needed.
-6. Keep long-lived WSL workloads on ext4 paths such as `/home/...`, not `/mnt/*`, and prefer `wsl-py-capture` / `wsl-capture` plus absolute interpreters for machine decisions.
-
-## License
-
-MIT.
-
-## Provenance
-
-This export was prepared as a standalone executor-only repository and intentionally excludes the rest of the workspace.
-
-Source, docs, and packaging for this repo were produced end-to-end with an agent workflow.
+[MIT](LICENSE). This standalone repository exports the executor toolkit;
+source, documentation and packaging were developed through an agent workflow.

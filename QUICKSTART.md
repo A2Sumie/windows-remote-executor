@@ -1,38 +1,64 @@
-# Quick Start
+# WRE v6 Quick Start
 
-Read `AGENTS.md` first. Use MCP tools for routine Windows work and `windows-remote-executor/bin/win-remote` for manual debugging, deployment, and bootstrap packaging. `win-remote` is a Python shim around the V3 `rpc-stdio` client; there is no older transport fallback.
+For a new Windows host, follow [DEPLOYMENT.md](DEPLOYMENT.md) first. It prepares
+OpenSSH, installs the Windows package and sets up a matching controller.
 
-This repo is the source tree. Parent-workspace executor paths may be symlinks into it. For remote deployment, tag and publish a GitHub release, then deploy release assets.
-From the parent livestr workspace, use `git -C windows-remote-executor-public ...` so nested repos are not confused with the workspace root.
+## Prepare the controller
 
-## First Commands
+On macOS/Linux with Python 3.10+ and OpenSSH client tools:
 
 ```bash
-./windows-remote-executor/bin/win-remote probe <target>
-./windows-remote-executor/bin/win-remote run <target> whoami.exe
+git clone --branch v6.1.2 --depth 1 https://github.com/A2Sumie/windows-remote-executor.git wre-controller-6.1.2
+cd wre-controller-6.1.2
+cp v6/targets/example.env v6/targets/WIN-LAB.env
+chmod 600 v6/targets/WIN-LAB.env
 ```
 
-## Route Rules
+Set the real SSH host/user/port, private-key path,
+`TARGET_EXPECTED_LISTEN_ADDRESS` and `TARGET_ACCESS_TOKEN` in that env file.
+The token is the plain secret used by the Windows installer. SSH key
+authentication must work unattended (`BatchMode=yes`).
 
-- MCP tools call the Python V3 client directly; prefer them for routine agent control.
-- `run`, `capture`, and `spawn` are native argv actions for concrete executables over `process.run`, `process.capture`, and `process.spawn`.
-- `capture` is the machine-readable process-output route.
-- `exec` and `exec-capture` send a script body through `script.run` / `script.capture`; use `--file` or `--stdin` for script-shaped Windows maintenance.
-- The wrapper rejects drive-relative Windows paths such as `D:folderfile.py`; quote backslash paths or use `D:/folder/file.py`.
-- The wrapper has a default guard for `powershell.exe` and `pwsh` through `run`, `capture`, and `spawn`; use `--allow-powershell` or `exec` when that is the lower-error choice.
-- On `policy --command-mode argv-only`, native policy rejects shell/interpreter executables through `run`, `capture`, and `spawn`.
-- `argv-only` still allows V3 script actions for staged maintenance; describe the route choice, not a blanket ban.
-- `wsl` and `wsl-capture` call V3 `wsl.run` / `wsl.capture`.
-- `wsl-sh` / `wsl-sh-capture` send shell script bodies through V3 `wsl.script` / `wsl.script.capture`.
-- `wsl-py` / `wsl-py-capture` carry explicit WSL Python interpreter, cwd, module/script, and args through WSL argv actions.
-- `wsl-resident` is for durable WSL services and readiness diagnostics.
-- Use `tasks` or MCP `win_tasks` for scheduled-task inspection.
-- Use `policy`, `guard`, and `repair` for access policy and `sshd` safety.
-- If a workflow needs new remote-control coverage, add a V3 RPC action plus MCP/tool support before adding another quoting convention.
+## First commands
 
-## Boundaries
+Run from the released controller checkout root:
 
-- Keep targets `private-only` unless the operator changes that requirement.
-- Keep token enforcement, `access-policy.json`, and `sshd` guardrails.
-- Keep WSL models, caches, venvs, and hot code on ext4 paths such as `/home/...`, not `/mnt/*`.
-- Prefer framework-dependent `.NET 8` builds when the host already has `.NET 8`; use self-contained publish for brand-new hosts or drop-and-run packaging.
+```bash
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --info
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --probe
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --guard
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB process.run '{"exe":"C:/WRE/wre/python/python.exe","args":["--version"]}'
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB host.tasks.list '{"prefix":"WRE","limit":20}'
+```
+
+Expect `ok: true`, protocol 6, build `v6.1` and a valid policy. The process
+result should have `exitCode: 0`. `--guard` inspects with `noDisable: true`.
+For repeated calls, use a session or REPL:
+
+```bash
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --repl
+PYTHONPATH=. python3 -m v6.controller.shell WIN-LAB --session host.info '{}' host.tasks.list '{"prefix":"WRE","limit":20}'
+```
+
+## Choose the action
+
+| Work | v6 action/tool route |
+|---|---|
+| Run a concrete executable | `process.run` / MCP `wre_run`, absolute `exe` plus an `args` array |
+| Start a finite job | `process.start`, then `process.status`, `process.wait` or `process.kill` |
+| Read/write a file | `file.readText` / `file.writeText` |
+| Search files | `file.search` / MCP `wre_search`; optional `wre_find` needs separate `wreq.exe` |
+| Inspect tasks | `host.tasks.list` / `host.tasks.detail` |
+| Privileged task work | `host.task.*` or the installed SYSTEM apply-agent |
+| Run in WSL | `wsl.run` with an explicit argument vector |
+| Discover a schema | `system.help` or `host.capabilities` |
+
+Keep Windows paths in forward-slash form inside JSON. Send script bodies as
+file text and run the staged file with explicit arguments. Processes and WSL
+run as the SSH user; privileged tasks use the explicit SYSTEM lanes.
+A transport break after a write may mean the host already processed it, so
+inspect state before deliberately retrying.
+
+For installation, release-based updates, rollback and MCP configuration, use
+[the deployment guide](DEPLOYMENT.md). For the full schema, read
+[the v6 reference at the release tag](https://github.com/A2Sumie/windows-remote-executor/blob/v6.1.2/v6/V6.md).
