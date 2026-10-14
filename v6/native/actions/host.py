@@ -200,6 +200,11 @@ def _repair(payload: dict[str, Any]) -> dict[str, Any]:
 
     steps: list[str] = []
     rewritten = False
+    recovery_result = svc_mod.ensure_auto_recovery_safe("sshd")
+    if recovery_result.get("ensured"):
+        steps.append("sshd.recovery.ensured")
+    else:
+        steps.append("sshd.recovery.error:" + str(recovery_result.get("error")))
     try:
         rewrite_result = sshd_mod.rewrite_config(expected_listen=expected, force=force_rewrite, log_path=log_path)
         rewritten = bool(rewrite_result.get("rewritten"))
@@ -213,22 +218,28 @@ def _repair(payload: dict[str, Any]) -> dict[str, Any]:
     sshd_state = svc_mod.service_state_safe("sshd").get("state")
     if rewritten or sshd_state != "Running":
         result = svc_mod.restart_service_safe("sshd")
-        if result.get("action") == "restarted":
-            steps.append("sshd.restarted")
+        if result.get("action") in ("started", "restarted"):
+            steps.append("sshd." + result["action"])
         else:
             steps.append(f"sshd.restart.error:{result.get('error')}")
     else:
         steps.append("sshd.restart.skipped:config-unchanged-and-service-running")
 
     try:
-        tasks_mod.ensure_repair_tasks(expected_listen=expected)
-        steps.append("repair_tasks.ensured")
+        task_result = tasks_mod.ensure_repair_tasks(expected_listen=expected)
+        if task_result.get("errors"):
+            steps.extend("repair_tasks.error:" + error for error in task_result["errors"])
+        else:
+            steps.append("repair_tasks.ensured")
     except Exception as exc:  # noqa: BLE001
         steps.append(f"repair_tasks.error:{exc}")
 
     try:
-        fw_mod.ensure_sshd_firewall_rule()
-        steps.append("firewall.ensured")
+        firewall_result = fw_mod.ensure_sshd_firewall_rule()
+        if firewall_result.get("ensured"):
+            steps.append("firewall.ensured")
+        else:
+            steps.append("firewall.error:" + str(firewall_result.get("error")))
     except Exception as exc:  # noqa: BLE001
         steps.append(f"firewall.skipped:{exc}")
 

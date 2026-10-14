@@ -72,8 +72,7 @@ def selftest(entry_path: Path, python_exe: Path) -> bool:
     completed = subprocess.run(
         [str(python_exe), "-I", "-X", "utf8", str(entry_path), "selftest"],
         stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         text=True,
         encoding="utf-8",
         timeout=30,
@@ -84,7 +83,7 @@ def selftest(entry_path: Path, python_exe: Path) -> bool:
         return False
     try:
         response = json.loads(completed.stdout.strip().splitlines()[-1])
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         _info(f"selftest parse error: {exc}\n  raw: {completed.stdout[:400]}")
         return False
     actions = response.get("data", {}).get("actions") or []
@@ -141,7 +140,7 @@ def backup_and_rewrite_sshd_config(dest: Path, expected_listen: str, force_comma
     """Backup `C:/ProgramData/ssh/sshd_config` and rewrite ListenAddress
     (+ ForceCommand only when --force-command was given)."""
     sys.path.insert(0, str(dest))
-    from win32 import sshd as sshd_mod  # noqa: E402
+    from win32 import sshd as sshd_mod
     backup_dir = dest / "backup"
     backup_dir.mkdir(exist_ok=True)
     ts = _now()
@@ -235,28 +234,33 @@ def _patch_sshd_config(text: str, expected_listen: str, *, force_command: bool) 
 
 def restart_sshd_service(dest: Path) -> None:
     sys.path.insert(0, str(dest))
-    from win32 import service as svc_mod  # noqa: E402
+    from win32 import service as svc_mod
     result = svc_mod.restart_service_safe("sshd", timeout_seconds=20)
     _info(f"sshd restart: {result}")
 
 
 def ensure_scheduled_tasks(dest: Path, expected_listen: str) -> None:
     sys.path.insert(0, str(dest))
-    from win32 import scheduled_tasks as tasks_mod  # noqa: E402
+    from win32 import scheduled_tasks as tasks_mod
+    from win32 import service as svc_mod
+    recovery = svc_mod.ensure_auto_recovery_safe("sshd")
+    if not recovery.get("ensured"):
+        raise RuntimeError(f"sshd startup recovery configuration failed: {recovery.get('error')}")
+    _info(f"sshd startup recovery: {recovery}")
     result = tasks_mod.ensure_repair_tasks(expected_listen=expected_listen)
     _info(f"repair tasks: created={result['created']} errors={result['errors']}")
 
 
 def ensure_streamserv_task(dest: Path, root: str, run_as_user: str) -> None:
     sys.path.insert(0, str(dest))
-    from win32 import scheduled_tasks as tasks_mod  # noqa: E402
+    from win32 import scheduled_tasks as tasks_mod
     result = tasks_mod.ensure_streamserv_task(root=root, run_as_user=run_as_user)
     _info(f"streamserv task: {result}")
 
 
 def ensure_apply_agent(dest: Path, expected_listen: str) -> None:
     sys.path.insert(0, str(dest))
-    from win32 import scheduled_tasks as tasks_mod  # noqa: E402
+    from win32 import scheduled_tasks as tasks_mod
     result = tasks_mod.ensure_apply_agent_task(expected_listen=expected_listen)
     _info(f"apply agent task: {result}")
 
@@ -267,7 +271,7 @@ def write_apply_spec(dest: Path, expected_listen: str, register_streamserv: bool
     resolved_run_as = streamserv_run_as
     if register_streamserv:
         sys.path.insert(0, str(dest))
-        from win32 import scheduled_tasks as tasks_mod  # noqa: E402
+        from win32 import scheduled_tasks as tasks_mod
         resolved_run_as = tasks_mod.resolve_run_as_user(streamserv_run_as)
     spec = {
         "expectedListenAddress": expected_listen,
@@ -319,10 +323,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     _info(f"target={args.target_name} expected_listen={args.expected_listen}")
-    if not args.tasks_only:
-        if bool(args.access_token) == bool(args.keep_existing_policy):
-            _die("exactly one of --access-token / --keep-existing-policy is required "
-                 "(v6 has no null-token default policy)")
+    if not args.tasks_only and bool(args.access_token) == bool(args.keep_existing_policy):
+        _die("exactly one of --access-token / --keep-existing-policy is required "
+             "(v6 has no null-token default policy)")
     if os.name != "nt":
         _die("deploy-wre.py must be run on Windows.")
     if not _run_as_admin():
@@ -439,7 +442,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _info("")
     _info("== deploy-wre complete ==")
-    _info(f"Next step (from the controller):")
+    _info("Next step (from the controller):")
     _info(f"  PYTHONPATH=. python3 -m v6.scripts.verify_v6_remote {args.target_name}")
     _info("If ssh cannot reach v6, restore the backup sshd_config in")
     _info(f"  {dest / 'backup'}")

@@ -55,18 +55,66 @@ def restart_service_safe(name: str, timeout_seconds: int = 20) -> dict[str, Any]
     _validate_service_name(name)
     try:
         win32serviceutil, win32service = _import_win32serviceutil()
-        win32serviceutil.StopService(name)
-        # Wait until stopped.
-        deadline = time.time() + timeout_seconds
-        while time.time() < deadline:
-            state = service_state_safe(name).get("state")
-            if state in ("stopped", "absent"):
-                break
-            time.sleep(0.5)
+        deadline = time.monotonic() + timeout_seconds
+        state = win32serviceutil.QueryServiceStatus(name)[1]
+        was_stopped = state == win32service.SERVICE_STOPPED
+
+        def wait_for(desired: int, phase: str) -> None:
+            while win32serviceutil.QueryServiceStatus(name)[1] != desired:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"{name} did not finish {phase} within {timeout_seconds}s")
+                time.sleep(0.2)
+
+        if not was_stopped:
+            if state != win32service.SERVICE_STOP_PENDING:
+                win32serviceutil.StopService(name)
+            wait_for(win32service.SERVICE_STOPPED, "stopping")
         win32serviceutil.StartService(name)
-        return {"name": name, "action": "restarted", "deadlineSeconds": timeout_seconds}
+        wait_for(win32service.SERVICE_RUNNING, "starting")
+        return {"name": name, "action": "started" if was_stopped else "restarted",
+                "deadlineSeconds": timeout_seconds}
     except Exception as exc:  # noqa: BLE001
         return {"name": name, "action": "restart.error", "error": str(exc)}
+
+
+def ensure_auto_recovery_safe(name: str) -> dict[str, Any]:
+    """Delay automatic startup and retry failed starts after the VPN can settle."""
+    _validate_service_name(name)
+    try:
+        _, win32service = _import_win32serviceutil()
+        manager = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
+        try:
+            access = (win32service.SERVICE_QUERY_CONFIG | win32service.SERVICE_CHANGE_CONFIG
+                      | win32service.SERVICE_START)
+            handle = win32service.OpenService(manager, name, access)
+            try:
+                changed: list[str] = []
+                if win32service.QueryServiceConfig(handle)[1] != win32service.SERVICE_AUTO_START:
+                    win32service.ChangeServiceConfig(
+                        handle, win32service.SERVICE_NO_CHANGE, win32service.SERVICE_AUTO_START,
+                        win32service.SERVICE_NO_CHANGE, None, None, 0, None, None, None, None,
+                    )
+                    changed.append("automatic")
+                if not win32service.QueryServiceConfig2(handle, win32service.SERVICE_CONFIG_DELAYED_AUTO_START_INFO):
+                    win32service.ChangeServiceConfig2(handle, win32service.SERVICE_CONFIG_DELAYED_AUTO_START_INFO, True)
+                    changed.append("delayedAutoStart")
+                recovery = win32service.QueryServiceConfig2(handle, win32service.SERVICE_CONFIG_FAILURE_ACTIONS)
+                desired_actions = [(win32service.SC_ACTION_RESTART, 60000)] * 3
+                if recovery["ResetPeriod"] != 86400 or list(recovery["Actions"]) != desired_actions:
+                    recovery.update(ResetPeriod=86400, Actions=desired_actions)
+                    win32service.ChangeServiceConfig2(handle, win32service.SERVICE_CONFIG_FAILURE_ACTIONS, recovery)
+                    changed.append("failureActions")
+                if not win32service.QueryServiceConfig2(handle, win32service.SERVICE_CONFIG_FAILURE_ACTIONS_FLAG):
+                    win32service.ChangeServiceConfig2(handle, win32service.SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, True)
+                    changed.append("failureActionsFlag")
+                return {"name": name, "ensured": True, "changed": changed,
+                        "delayedAutoStart": True, "restartDelaySeconds": 60}
+            finally:
+                win32service.CloseServiceHandle(handle)
+        finally:
+            win32service.CloseServiceHandle(manager)
+    except Exception as exc:  # noqa: BLE001
+        return {"name": name, "ensured": False, "error": str(exc)}
 
 
 def set_service_start_mode_safe(name: str, mode: str) -> dict[str, Any]:

@@ -302,8 +302,14 @@ def _run_repair_sshd(argv: list[str]) -> int:
     }
     try:
         result = host_actions._repair(payload)
-        sys.stderr.write(json.dumps(result.get("data", {}), ensure_ascii=False) + "\n")
-        return 0
+        data = result.get("data", {})
+        sys.stderr.write(json.dumps(data, ensure_ascii=False) + "\n")
+        # A scheduled repair must not report success when sshd could not be
+        # started or its configuration could not be written.
+        failed = any(step.startswith(("sshd.restart.error:", "sshd.recovery.error:",
+                                      "sshd_config.error:", "repair_tasks.error:"))
+                     for step in data.get("steps", []))
+        return 1 if failed else 0
     except Exception as exc:  # noqa: BLE001
         sys.stderr.write(f"repair-sshd error: {exc}\n")
         return 1

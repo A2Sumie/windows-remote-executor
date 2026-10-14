@@ -387,6 +387,10 @@ def _set_trigger(definition, trigger_kind: str, delay_iso: str | None, interval_
         return
     trigger_id = TRIGGER_NAME_TO_ID[trigger_kind]
     trigger = definition.Triggers.Create(trigger_id)
+    if trigger_kind == "interval":
+        # A repeating time trigger needs a real start boundary. A boot
+        # trigger recreated after boot never fires until the next boot.
+        trigger.StartBoundary = (datetime.now() + timedelta(minutes=2)).replace(microsecond=0).isoformat()
     if delay_iso:
         try:
             trigger.Delay = delay_iso
@@ -586,21 +590,24 @@ def _iso(value) -> str:  # type: ignore[no-untyped-def]
 
 # crap:ok windows-only lane (COM/service/sshd/sftp/interactive) — verified on-host by scripts/verify_v6_remote.py; off-Windows coverage N/A
 def ensure_repair_tasks(*, expected_listen: str | None) -> dict[str, Any]:
-    """Re-create the three `<TASK_PREFIX> Sshd Repair` tasks, pointing at the
-    RUNNING tree (WRE_TREE) — a sidecar wre6 repairs with its own rpc.py."""
+    """Ensure repair tasks without resetting healthy triggers on every run."""
     pythonw = f"{WRE_TREE}/python/pythonw.exe"
     wre_entry = f"{WRE_TREE}/rpc.py"
 
     task_defs: list[dict[str, Any]] = [
         {"name": f"{TASK_PREFIX} Sshd Repair Logon", "trigger": "logon", "delay_iso": "PT30S"},
-        {"name": f"{TASK_PREFIX} Sshd Repair Startup", "trigger": "startup", "delay_iso": "PT60S"},
-        {"name": f"{TASK_PREFIX} Sshd Repair Watch", "trigger": "boot",
-         "delay_iso": "PT2M", "interval_minutes": 10},
+        # Task Scheduler normalizes a 60-second delay to PT1M on readback.
+        {"name": f"{TASK_PREFIX} Sshd Repair Startup", "trigger": "startup", "delay_iso": "PT1M"},
+        {"name": f"{TASK_PREFIX} Sshd Repair Watch", "trigger": "interval",
+         "interval_minutes": 10},
     ]
 
-    results: dict[str, Any] = {"created": [], "errors": []}
+    results: dict[str, Any] = {"created": [], "kept": [], "errors": []}
     for spec in task_defs:
         try:
+            if _repair_task_matches(spec, pythonw, wre_entry):
+                results["kept"].append(spec["name"])
+                continue
             create_task({
                 "name": spec["name"],
                 "exe": pythonw,
@@ -616,6 +623,36 @@ def ensure_repair_tasks(*, expected_listen: str | None) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             results["errors"].append(f"{spec['name']}: {exc}")
     return results
+
+
+def _repair_task_matches(spec: dict[str, Any], pythonw: str, wre_entry: str) -> bool:
+    try:
+        task = _root_folder(_connect_task_service()).GetTask(spec["name"])
+        definition = task.Definition
+        if not definition.Settings.Enabled or int(definition.Actions.Count) != 1 or int(definition.Triggers.Count) != 1:
+            return False
+        principal = definition.Principal
+        if str(principal.UserId).upper() not in ("SYSTEM", "NT AUTHORITY\\SYSTEM", "S-1-5-18"):
+            return False
+        if int(principal.LogonType) != TASK_LOGON_SERVICE_ACCOUNT or int(principal.RunLevel) != TASK_RUNLEVEL_HIGHEST:
+            return False
+        action = definition.Actions.Item(1)
+        expected_args = _join_args(_win_args(["-I", "-X", "utf8", wre_entry, "repair-sshd"]))
+        if _win_path(str(action.Path)).casefold() != _win_path(pythonw).casefold() or str(action.Arguments) != expected_args:
+            return False
+        trigger = definition.Triggers.Item(1)
+        if not trigger.Enabled or int(trigger.Type) != TRIGGER_NAME_TO_ID[spec["trigger"]]:
+            return False
+        if spec.get("delay_iso") and str(trigger.Delay) != spec["delay_iso"]:
+            return False
+        if spec.get("interval_minutes"):
+            if str(trigger.Repetition.Interval) != f"PT{spec['interval_minutes']}M" or not str(trigger.StartBoundary):
+                return False
+        return (bool(definition.Settings.StartWhenAvailable)
+                and not definition.Settings.DisallowStartIfOnBatteries
+                and not definition.Settings.StopIfGoingOnBatteries)
+    except Exception:
+        return False
 
 
 def ensure_streamserv_task(*, root: str = "D:/StreamServ", run_as_user: str = "SYSTEM") -> dict[str, Any]:
